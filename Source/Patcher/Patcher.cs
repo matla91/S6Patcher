@@ -13,26 +13,29 @@ namespace S6Patcher.Source.Patcher
     {
         private readonly BinaryParser GlobalBinaryFileParser;
         private readonly FileStream GlobalStream;
+        private readonly ExecutableTransaction Transaction;
+        private bool Disposed;
         private readonly Mappings GlobalMappings;
         public readonly Mod GlobalMod;
 
         public readonly execID GlobalID;
         private readonly Lock WriteLock = new();
-        public event Action<string> ShowMessage;
 
         public Patcher(string FilePath)
         {
-            if (FilePath == null)
+            if (string.IsNullOrWhiteSpace(FilePath) || !File.Exists(FilePath))
             {
                 throw new ArgumentException("No file chosen or file does not exist!\nAborting ...");
             }
 
             try
             {
-                GlobalStream = OpenExecutableFile(FilePath);
+                Transaction = new ExecutableTransaction(FilePath);
+                GlobalStream = IOFileHandler.Instance.OpenFileStream(Transaction.WorkingPath, true, FileMode.Open);
             }
             catch (Exception)
             {
+                Transaction?.Dispose();
                 throw;
             }
 
@@ -44,6 +47,7 @@ namespace S6Patcher.Source.Patcher
             catch (Exception)
             {
                 IOFileHandler.Instance.CloseStream(GlobalStream);
+                Transaction.Dispose();
                 throw;
             }
 
@@ -54,23 +58,18 @@ namespace S6Patcher.Source.Patcher
             catch (Exception)
             {
                 IOFileHandler.Instance.CloseStream(GlobalStream);
+                Transaction.Dispose();
                 throw;
             }
 
-            GlobalMappings = new Mappings(GlobalID, GlobalBinaryFileParser);
-            GlobalMod = new Mod(GlobalID, GlobalStream.Name);
+            try
+            {
+                GlobalMappings = new Mappings(GlobalID, GlobalBinaryFileParser);
+                GlobalMod = new Mod(GlobalID, Transaction.TargetPath);
+            }
+            catch { Dispose(); throw; }
 
             Logger.Instance.Log("ID: " + GlobalID.ToString() + ", Stream: " + GlobalStream.Name);
-        }
-
-        private FileStream OpenExecutableFile(string ExecutablePath)
-        {
-            if (!Backup.Create(ExecutablePath))
-            {
-                throw new Exception("Could not create backup file!\nAborting ...");
-            }
-
-            return IOFileHandler.Instance.OpenFileStream(ExecutablePath, true);
         }
 
         public void PatchByControlFeatures(List<string> Features) => WriteMappingToFile(GlobalMappings.GetMapping(Features));
@@ -79,7 +78,7 @@ namespace S6Patcher.Source.Patcher
         {
             Logger.Instance.Log("Called with " + ResolutionText);
 
-            if (!uint.TryParse(ResolutionText, out uint Resolution))
+            if (!uint.TryParse(ResolutionText, out uint Resolution) || Resolution < 4)
             {
                 HandleError("Invalid texture resolution value: " + ResolutionText);
                 return;
@@ -94,7 +93,7 @@ namespace S6Patcher.Source.Patcher
         {
             Logger.Instance.Log("Called with " + AutosaveText);
 
-            if (!double.TryParse(AutosaveText, out double Timer))
+            if (!double.TryParse(AutosaveText, out double Timer) || !double.IsFinite(Timer) || Timer < 0 || !double.IsFinite(Timer * 60000))
             {
                 HandleError("Invalid autosave timer value: " + AutosaveText);
                 return;
@@ -107,7 +106,8 @@ namespace S6Patcher.Source.Patcher
         {
             Logger.Instance.Log("Called with " + ZoomText);
 
-            if (!double.TryParse(ZoomText, out double Level) || !float.TryParse(ZoomText, out float Distance))
+            if (!double.TryParse(ZoomText, out double Level) || !float.TryParse(ZoomText, out float Distance)
+                || !double.IsFinite(Level) || !float.IsFinite(Distance) || Level <= 0 || !float.IsFinite(Distance + 4800f))
             {
                 HandleError("Invalid zoom level value: " + ZoomText);
                 return;
@@ -121,11 +121,13 @@ namespace S6Patcher.Source.Patcher
             Logger.Instance.Log("Called with " + FolderPath);
 
             uint MaxSize = 0xB4;
-            int Size = Encoding.Unicode.GetByteCount(FolderPath);
+            if (string.IsNullOrWhiteSpace(FolderPath) || FolderPath.Contains('\0'))
+                throw new ArgumentException("Invalid documents folder path.");
+            int Size = Encoding.Unicode.GetByteCount(FolderPath + "\0");
 
             if (Size > MaxSize)
             {
-                HandleError($"The documents folder path is too long! Maximum length is {MaxSize} unicode characters.");
+                HandleError($"The documents folder path is too long! Maximum length is {MaxSize / 2 - 1} UTF-16 code units.");
                 return;
             }
             else if (Size < 3)
@@ -181,7 +183,7 @@ namespace S6Patcher.Source.Patcher
             WriteMappingToFile(GlobalMappings.GetScriptFileMapping());
             foreach (var Element in Utility.ScriptFeatures)
             {
-                SetEntryInOptionsFile(Element.Key, Element.Value);
+                IOFileHandler.Instance.UpdateEntryInOptionsFile("[S6Patcher]", Element.Key, Element.Value ? "1" : "0", OnlyIfMissing: true);
             }
 
             IOFileHandler.Instance.UpdateEntryInOptionsFile("[S6Patcher]", "Version", " - S6Patcher v" + Utility.GetApplicationVersion()[..3]);
@@ -190,6 +192,8 @@ namespace S6Patcher.Source.Patcher
 
         private void WriteMappingToFile(Dictionary<UInt32, byte[]> Mapping)
         {
+            foreach (var Entry in Mapping)
+                ValidateWrite(Entry.Key, Entry.Value);
             foreach (var Entry in Mapping)
             {
                 WriteBytes(Entry.Key, Entry.Value);
@@ -201,6 +205,7 @@ namespace S6Patcher.Source.Patcher
         {
             lock (WriteLock)
             {
+                ValidateWrite(Position, Bytes);
                 GlobalStream.Position = Position;
                 try
                 {
@@ -213,30 +218,57 @@ namespace S6Patcher.Source.Patcher
             }
         }
 
+        private void ValidateWrite(long Position, byte[] Bytes)
+        {
+            if (Bytes == null || Bytes.Length == 0 || Position < 0 || Position > GlobalStream.Length - Bytes.Length)
+                throw new InvalidDataException($"Patch at 0x{Position:X} is outside the executable. No changes will be committed.");
+        }
+
         private void HandleError(string Message)
         {
             ErrorTracking.Increment();
-            ShowMessage.Invoke(Message);
             Logger.Instance.Log(Message);
+            throw new InvalidDataException(Message);
         }
 
-        public void Dispose(bool FinishWithPEHeader)
+        public void Complete(bool FinishWithPEHeader)
         {
-            IOFileHandler.Instance.WriteBackToOptionsFiles();
-
+            if (Disposed) throw new ObjectDisposedException(nameof(Patcher));
+            if (ErrorTracking.Count != 0) throw new IOException("Patching reported errors. The executable was not modified.");
+            string BackupPath = Backup.GetBackupPath(Transaction.TargetPath, false);
+            if (File.Exists(BackupPath))
+            {
+                using FileStream Saved = new(BackupPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (new Validator(Saved).Validate() != GlobalID)
+                    throw new InvalidDataException("Existing backup belongs to another edition. No patch was committed.");
+            }
             string Name = GlobalStream.Name;
             long Size = GlobalStream.Length;
-
+            GlobalStream.Flush(true);
             lock (WriteLock)
             {
                 IOFileHandler.Instance.CloseStream(GlobalStream);
             }
 
-            GlobalBinaryFileParser.Dispose();
-
             if (FinishWithPEHeader)
             {
                 new CheckSumCalculator().WritePEHeaderFileCheckSum(Name, Size);
+            }
+            IOFileHandler.Instance.WriteBackToOptionsFiles();
+            if (ErrorTracking.Count != 0) throw new IOException("Could not finish patching. The executable was not modified; check the log for auxiliary file errors.");
+            Transaction.Commit();
+        }
+
+        public void Dispose()
+        {
+            if (Disposed) return;
+            Disposed = true;
+            try { IOFileHandler.Instance.CloseStream(GlobalStream); }
+            finally
+            {
+                GlobalBinaryFileParser?.Dispose();
+                Transaction?.Dispose();
+                IOFileHandler.Instance.DiscardOptionChanges();
             }
         }
     }

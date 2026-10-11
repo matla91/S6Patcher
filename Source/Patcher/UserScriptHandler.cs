@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
 
 namespace S6Patcher.Source.Patcher
 {
@@ -25,14 +26,17 @@ namespace S6Patcher.Source.Patcher
         };
         private string[] ScriptFiles => [.. Scripts.Keys];
         private byte[][] ScriptResources => [.. Scripts.Values];
+
+        internal bool MatchesEmbeddedBundle(List<MemoryStream> Files) => Files != null && Files.Count == ScriptResources.Length
+            && Files.Select((File, Index) => File != null && SHA256.HashData(File.ToArray()).AsSpan().SequenceEqual(SHA256.HashData(ScriptResources[Index]))).All(Match => Match);
         public string GlobalDocuments {get; set;} = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
-        public bool DoesUserScriptDirectoryExist() => GetUserScriptDirectories().Count != 0;
+        public bool DoesUserScriptDirectoryExist() => GetUserScriptDirectories().Any(Directory => File.Exists(Path.Combine(Directory, "Config", "Options.ini")));
 
         public List<string> GetUserScriptDirectories() => !string.IsNullOrEmpty(GlobalDocuments) ? SelectUserScriptDirectories(GlobalDocuments) : [];
 
-        private static List<string> SelectUserScriptDirectories(string Documents) => [.. Directory.GetDirectories(Documents)
-                .Where(Element => Element.Contains("Aufstieg eines") || Element.Contains("Rise of an"))
+        private static List<string> SelectUserScriptDirectories(string Documents) => !Directory.Exists(Documents) ? [] : [.. Directory.GetDirectories(Documents)
+                .Where(Element => Path.GetFileName(Element).Contains("Aufstieg eines") || Path.GetFileName(Element).Contains("Rise of an"))
                 .Select(Element => {Element = Path.Combine(Documents, Element); return Element;})];
 
         private async Task<List<MemoryStream>> DownloadScriptFiles()
@@ -51,6 +55,9 @@ namespace S6Patcher.Source.Patcher
         {
             // If download fails, write local files from embedded resources as fallback
             var Files = UseDownload ? await DownloadScriptFiles() : null;
+            bool UseDownloadedBundle = MatchesEmbeddedBundle(Files);
+            if (UseDownload && !UseDownloadedBundle)
+                Logger.Instance.Log("Online scripts are missing or differ from this build. Using the complete bundled script set to preserve compatibility.");
             foreach (string Element in GetUserScriptDirectories())
             {
                 string CurrentPath = Path.Combine(Element, "Script");
@@ -60,17 +67,13 @@ namespace S6Patcher.Source.Patcher
                     for (int i = 0; i < ScriptFiles.Length; i++)
                     {
                         string FilePath = Path.Combine(CurrentPath, ScriptFiles[i]);
-                        if (Files != null && Files.Count == ScriptFiles.Length)
+                        if (UseDownloadedBundle)
                         {
-                            using FileStream Stream = IOFileHandler.Instance.OpenFileStream(FilePath);
-                            await Files[i].CopyToAsync(Stream);
-                            Stream.SetLength(Stream.Position);
-                            IOFileHandler.Instance.CloseStream(Stream);
-                            Files[i].Seek(0, SeekOrigin.Begin);
+                            await AtomicFile.WriteAllBytesAsync(FilePath, Files[i].ToArray());
                         }
                         else
                         {
-                            File.WriteAllBytes(FilePath, ScriptResources[i]);
+                            await AtomicFile.WriteAllBytesAsync(FilePath, ScriptResources[i]);
                         }
 
                         Logger.Instance.Log("Finished writing ScriptFile named " + ScriptFiles[i] + " to " + CurrentPath);

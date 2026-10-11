@@ -187,7 +187,6 @@ namespace S6Patcher.Source.Views
             }
 
             txtPath.Text = Filepath;
-            MainPatcher.ShowMessage += async Message => await ShowMessageBox("Error", Message);
             MainPatcher.GlobalMod.ShowMessage += async Message => await ShowMessageBox("ModLoader", Message);
             
             EnableUIElements(MainPatcher.GlobalID);
@@ -195,7 +194,8 @@ namespace S6Patcher.Source.Views
 
         private async Task FinishPatching()
         {
-            ResetPatcher(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
+            MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
+            ResetPatcher();
             UncheckFeatureBoxes();
 
             string Message = "Patching finished!" + (ErrorTracking.Count > 0 ? 
@@ -207,20 +207,37 @@ namespace S6Patcher.Source.Views
 
         private async void MainPatchingTask()
         {
+            if (PatchingInProgress || MainPatcher == null) return;
             PatchingInProgress = true;
             ErrorTracking.Reset();
             Logger.Instance.Log("Patching Process Started!");
 
             DisableUI(false);
             btnChoose.IsEnabled = false;
+            btnExit.IsEnabled = false;
 
-            await ViewHelpers.GetPathToOptionsFile();
-            await PatchByFeatures();
-            await FinishPatching();
-
-            btnChoose.IsEnabled = true;
-            Logger.Instance.Log($"Patching Process Finished! Amount of Errors: {ErrorTracking.Count}");
-            PatchingInProgress = false;
+            try
+            {
+                await ViewHelpers.GetPathToOptionsFile();
+                if (MainPatcher.GlobalID != execID.ED && !UserScriptHandler.Instance.DoesUserScriptDirectoryExist())
+                    throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
+                await PatchByFeatures();
+                await FinishPatching();
+            }
+            catch (Exception ex)
+            {
+                ErrorTracking.Increment();
+                Logger.Instance.Log(ex.ToString());
+                await ShowMessageBox("Patching failed", ex.Message + "\nThe executable was not committed. Auxiliary files may have been updated; see S6Patcher.log.");
+            }
+            finally
+            {
+                ResetPatcher();
+                btnChoose.IsEnabled = true;
+                btnExit.IsEnabled = true;
+                PatchingInProgress = false;
+                Logger.Instance.Log($"Patching Process Finished! Amount of Errors: {ErrorTracking.Count}");
+            }
         }
 
         private List<string> GetFeatures()
@@ -246,12 +263,12 @@ namespace S6Patcher.Source.Views
             bool DoNotUseEmbedded = rbDownload.IsChecked == true;
             bool UseGameplayModification = cbModding.IsChecked == true;
 
-            Task Completed = Task.WhenAll(PatcherScriptFilesWrapper(DoNotUseEmbedded), 
-                PatcherModLoaderWrapper(UseBugfixMod, UseModLoader, DoNotUseEmbedded, UseGameplayModification));
+            // Keep mutations ordered and await each operation before another can fail or close the patcher.
+            await PatcherScriptFilesWrapper(DoNotUseEmbedded);
+            await PatcherModLoaderWrapper(UseBugfixMod, UseModLoader, DoNotUseEmbedded, UseGameplayModification);
 
             if (cbUpdater.IsChecked == true)
             {
-                await Completed;
                 return;
             }
 
@@ -281,7 +298,6 @@ namespace S6Patcher.Source.Views
                 MainPatcher.SetDocumentsFolderPath(txtFolderPath.Text);
             }
 
-            await Completed;
         }
 
         private async Task PatcherModLoaderWrapper(bool ModInstallation, bool UseModLoader, bool DoNotUseEmbedded, bool UseGamelayModification)
@@ -316,7 +332,7 @@ namespace S6Patcher.Source.Views
         {
             if (PatchingInProgress)
             {
-                GetUserExitOption();
+                // Closing streams while awaited work continues could invalidate the staged operation.
                 e.Cancel = true;
                 return;
             }
@@ -335,7 +351,7 @@ namespace S6Patcher.Source.Views
 
         private async void RestoreBackup()
         {
-            execID GlobalID = (execID)(MainPatcher?.GlobalID);
+            execID GlobalID = MainPatcher?.GlobalID ?? execID.NONE;
             string BackupPath = txtPath.Text;
             
             ResetPatcher();
@@ -346,9 +362,9 @@ namespace S6Patcher.Source.Views
         private async Task<bool> ShowPromptMessageBoxWrapper(string Title, string Message) => await ViewHelpers.ShowPromptMessageBox(Title, Message) == ButtonResult.Yes;
         private async Task ShowMessageBox(string Title, string Message) => await ViewHelpers.ShowMessageBox(Title, Message);
 
-        private void ResetPatcher(bool FinishWithPEHeader = false)
+        private void ResetPatcher()
         {
-            MainPatcher?.Dispose(FinishWithPEHeader);
+            MainPatcher?.Dispose();
             MainPatcher = null;
         }
 
@@ -425,7 +441,7 @@ namespace S6Patcher.Source.Views
                 return;
             }
 
-            string ArchiveFileName = Path.GetDirectoryName(FolderPath) + FileExtension;
+            string ArchiveFileName = FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + FileExtension;
             bool Result = await Archives.PackFolderFilesIntoArchiveFileAsync(FolderPath, ArchiveFileName);
 
             Message = $"Packed folder {Path.GetDirectoryName(FolderPath)} into archive file {Path.GetFileName(ArchiveFileName)}.";

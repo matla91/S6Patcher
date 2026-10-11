@@ -121,6 +121,7 @@
 
 				<Grid Name="grdBoxes" RowDefinitions="Auto Auto Auto">
 					<RadioButton Grid.Row="0" Name="rbDownload" IsChecked="true" IsCheckedChanged="rbDownload_IsCheckedChanged"
+						ToolTip.Tip="Scripts must match this build. Incompatible or missing downloads use the bundled files."
 						 GroupName="Installation Options" Content="Download latest files from GitHub"/>
 					<RadioButton Grid.Row="1" Name="rbEmbedded" GroupName="Installation Options" 
 						Content="Use local embedded Resources"/>

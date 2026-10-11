@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace S6Patcher.Source.Utilities
 {
@@ -37,6 +38,7 @@ namespace S6Patcher.Source.Utilities
 
         public void CloseStream(Stream Stream)
         {
+            if (Stream == null) return;
             Stream?.Dispose();
             if (Streams.TryGetValue(Stream, out uint Key))
             {
@@ -59,7 +61,7 @@ namespace S6Patcher.Source.Utilities
             return File.Exists(NewPath) ? NewPath : Filepath;
         }
 
-        public void UpdateEntryInOptionsFile(string Section, string Key, string Entry)
+        public void UpdateEntryInOptionsFile(string Section, string Key, string Entry, bool OnlyIfMissing = false)
         {
             string Name = "Options.ini";
             foreach (string Element in UserScriptHandler.Instance.GetUserScriptDirectories())
@@ -90,12 +92,7 @@ namespace S6Patcher.Source.Utilities
                     OpenOptionFiles.Add(CurrentPath, Lines);
                 }
 
-                Lines.RemoveAll(Line => Line.Contains(Key));
-                if (!Lines.Contains(Section))
-                {
-                    Lines.Add(Section);
-                }
-                Lines.Insert(Lines.IndexOf(Section) + 1, Key + "=" + Entry);
+                if (!OnlyIfMissing || !OptionsFile.HasKey(Lines, Section, Key)) OptionsFile.Set(Lines, Section, Key, Entry);
 
                 Logger.Instance.Log("Updated Section " + Section + " - Key " + Key + " - Entry: " + Entry);
             }
@@ -103,12 +100,12 @@ namespace S6Patcher.Source.Utilities
 
         public void WriteBackToOptionsFiles()
         {
-            Parallel.ForEach(OpenOptionFiles, Element =>
+            foreach (var Element in OpenOptionFiles.ToArray())
             {
                 try
                 {
                     string CRLF = "\r\n";
-                    File.WriteAllText(Element.Key, string.Join(CRLF, Element.Value) + CRLF);
+                    AtomicFile.WriteAllText(Element.Key, string.Join(CRLF, Element.Value) + CRLF);
                     OpenOptionFiles.Remove(Element.Key);
                     Logger.Instance.Log("Updated Options.ini file " + Element.Key);
                 }
@@ -117,13 +114,15 @@ namespace S6Patcher.Source.Utilities
                     ErrorTracking.Increment();
                     Logger.Instance.Log(ex.ToString());
                 }
-            });
+            }
 
             if (OpenOptionFiles.Count != 0)
             {
                 Logger.Instance.Log("Could not write back to all Options.ini files!");
             }
         }
+
+        public void DiscardOptionChanges() => OpenOptionFiles.Clear();
 
         public string GetModLoaderDirectory(execID ID, string Filepath)
         {
@@ -136,7 +135,7 @@ namespace S6Patcher.Source.Utilities
             DirectoryInfo Info = new(Path.GetDirectoryName(Filepath));
             for (; Depth > 0; Depth--)
             {
-                Info = Info.Parent;
+                Info = Info.Parent ?? throw new InvalidDataException("Executable is not in the expected game installation directory.");
             }
 
             Logger.Instance.Log("Root: " + Info.FullName);
