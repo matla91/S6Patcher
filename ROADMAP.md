@@ -32,6 +32,7 @@ de validation légalement publiables ; les fixtures restent artificielles.
 | P2 — D01 | Chaîne reproductible du menu EMXBinData.s6patcher | Moyen / moyen, outils à identifier | Source et binaire liés par hash/version ; rebuild vérifiable avant toute modification du menu |
 | P2 — issue #5 | Reproduire déplacement RTS/coins et relâchement de touches du moteur | Moyen / incertain | Distinguer comportement natif, patch et configuration ; aucune assimilation à la correction FPS |
 | P2 — N02 | Tests réseau déterministes : timeout, corps excessif, proxy et lot incomplet | Moyen / faible à moyen | Serveur local simulé ; repli atomique du lot et diagnostics sans blocage UI |
+| P2 — D09 | Lier le workflow de release historique aux validations du même commit et épingler ses dépendances | Moyen / faible | CI passée, package identifié par hash, rapport en jeu associé avant passage d'une draft à une version stable |
 | P3 — D07 | Documenter les instructions/chevauchements binaires puis isoler seulement les frontières nécessaires | Maintenance / moyen | Manifeste lisible, liens aux tests, sans refonte générale ni modification des offsets non justifiée |
 
 Ne pas commencer par une refonte de tous les singletons, une réécriture de

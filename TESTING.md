@@ -9,7 +9,9 @@ Référence auditée : `fd44b9d367a0a43180465151aa8cd21a621d47aa`,
 La validation du **dernier commit de code**
 [`cfc8ee8ef1568ac36f35ad90f4aa196ab9ca18bc`](https://github.com/matla91/S6Patcher/commit/cfc8ee8ef1568ac36f35ad90f4aa196ab9ca18bc)
 est visible dans [GitHub Actions, run 38176956069](https://github.com/matla91/S6Patcher/actions/runs/38176956069).
-Le commit documentaire ultérieur ne change ni sources ni tests.
+Les commits d'intégration et de documentation suivants ne changent ni sources
+C#/Lua ni tests. Le workflow historique de release est aligné au même SDK,
+mais n'a pas été déclenché (aucun tag/aucune release).
 
 | Validation exécutée | Résultat exact | Environnement / portée |
 | --- | --- | --- |

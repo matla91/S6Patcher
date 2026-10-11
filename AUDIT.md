@@ -116,6 +116,7 @@ Le nom/date des fichiers extraits n'a pas de validation de métadonnées équiva
 | D06 | R / P2 | Lecture des profils par noms anglais/allemand, modification de plusieurs profils ; dispositions non standard non certifiées | Sélection explicite d'un profil, chemins Unicode/UNC/jonctions en environnement Windows |
 | D07 | D / P3 | Singletons, ErrorTracking global, signatures sans manifests lisibles, paramètres numériques sans tests GPU | Isoler seulement les frontières nécessaires, conserver une matrice de compatibilité |
 | D08 | H / P1 | Jour/nuit, zoom extrême, ombres/réflexions, chevaliers, campagnes et commandes multijoueur dépendent du moteur | Validation manuelle par feature et par édition ; aucun succès en jeu annoncé |
+| D09 | D / P2 | Build-Publish.yml historique utilise des tags d'actions flottants et prépare une release draft sans dépendance à Validate ni rapport en jeu | SDK aligné à 10.0.100 ; actions et critères de publication à lier aux preuves du même commit avant une version stable ; workflow non déclenché |
 
 ## Historique et issues examinés
 

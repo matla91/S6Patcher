@@ -24,6 +24,15 @@ Il faut initialiser les sous-modules pour reproduire la compilation.
 `global.json` sélectionne le SDK 10.0.100 avec possibilité de patch compatible.
 Les tests utilisent l'assemblage réel de l'application, sans ouvrir une fenêtre.
 
+Deux workflows ont des rôles distincts. `Validate.yml` exécute la matrice de
+tests sur push/PR et vérifie la publication Windows, sans créer de release.
+Le workflow historique `Build-Publish.yml` répond aux tags `v*` ou
+à un lancement manuel et prépare des ZIP Windows/Linux puis une release **draft**.
+Son SDK est aligné à 10.0.100 : installer seulement une autre feature band via
+`10.0.x` ne satisferait pas le `latestPatch` de global.json. Il utilise encore
+des tags d'actions non épinglés par SHA et n'impose pas un rapport de tests en
+jeu ni la CI du même commit. Il n'a pas été déclenché pendant cette mission.
+
 La configuration Release produit un exécutable autonome, en fichier unique,
 avec trimming et compression. Les scripts, les deux définitions binaires et
 le petit `mod.bba` embarqué sont des ressources. Aucun exécutable propriétaire

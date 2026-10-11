@@ -140,11 +140,19 @@ et analyseurs activés, exécute les tests Windows/Linux, contrôle les scripts 
 Lua 5.1 et construit le package Windows Release avec trimming. Les actions sont
 épinglées par SHA, les droits limités à la lecture ; aucune release n'est créée.
 
+Le SDK du workflow historique `Build-Publish.yml` est également fixé à
+10.0.100 pour rester compatible avec global.json. Avec `latestPatch`, une
+autre feature band installée par `10.0.x` seule ne suffit pas
+([contrat SDK Microsoft](https://learn.microsoft.com/en-us/dotnet/core/tools/global-json#rollforward)).
+Ce workflow de release n'a pas été exécuté ; ses actions flottantes et son
+absence de lien aux validations restent D09. L'épinglage des actions ci-dessus
+concerne `Validate.yml`.
+
 Résultat au commit de code `cfc8ee8e` : Windows 70/70 C#, Linux 69/69 C# et
 22/22 Lua, compilations Debug à 0 avertissement/0 erreur, publication Windows
 Release réussie. Voir les preuves et commandes dans [TESTING.md](TESTING.md).
 
 Les fichiers de définitions, le menu binaire, le `mod.bba` embarqué, les offsets,
 le sous-module, les licences et les assets originaux restent inchangés. Les
-points D01–D08 et le mouvement RTS signalé dans l'issue #5 ne sont pas annoncés
+points D01–D09 et le mouvement RTS signalé dans l'issue #5 ne sont pas annoncés
 comme corrigés. Aucun fichier propriétaire ou sauvegarde du jeu n'a été ajouté.
