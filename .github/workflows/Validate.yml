@@ -28,6 +28,9 @@ jobs:
         run: dotnet build S6Patcher.csproj -c Debug -warnaserror -p:EnableNETAnalyzers=true
       - name: Run core and synthetic archive tests
         run: dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug
+      - name: Build Windows release package with trimming
+        if: runner.os == 'Windows'
+        run: dotnet publish S6Patcher.csproj -c Release -r win-x64 -o development-build
       - name: Install Lua 5.1
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
