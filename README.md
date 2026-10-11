@@ -40,6 +40,23 @@ The S6Patcher features a simple [Modloader](https://github.com/Eisenmonoxid/S6Pa
 - The configuration file `<Documents>\THE SETTLERS - Rise of an Empire\Config\Options.ini` is extended with a new section `[S6Patcher]`, where some necessary configuration values are stored.
 - The application creates a new folder `modloader` in the game installation path where modded files can be stored.  
 
+## Reliability development branch
+The fork branch `fix/reliability-audit-20261011` contains reliability fixes and
+synthetic regression tests. It is a development build for review; game validation
+is still required before a stable release. The original release links above
+refer to upstream builds and do not include these fork changes.
+
+- [Audit and evidence](AUDIT.md)
+- [Implemented fixes and remaining risks](FIXES.md)
+- [Automated results and isolated Windows test procedure](TESTING.md)
+- [Technical architecture](ARCHITECTURE.md)
+- [Prioritized remaining work](ROADMAP.md)
+
+Build with the .NET SDK selected by `global.json`, after initializing submodules.
+Run `dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug` for the C# tests
+and `lua5.1 Tests/camera_spec.lua` for the camera tests. The CI also builds the
+Windows Release package; it does not publish a release.
+
 ## Contribution
 In case you want to contribute your own features and/or fixes to the project, feel free to fork the repository and create a pull request.   
 **Important:** Everything contributed to the project must either be created by yourself or approved by the original author(s).
