@@ -137,6 +137,16 @@ test("script reload cleans up active FPS", function()
     setup(); S6Patcher.FPSMode.Toggle(); assert(compile(cameraSource))()
     eq(S6Patcher.FPSMode.Enabled, false); eq(state.pages, 0); eq(state.camera, 0)
 end)
+test("script reload retains a failed recovery for escape to retry", function()
+    setup(); S6Patcher.FPSMode.Toggle(); local previous = S6Patcher.FPSMode
+    local original = Display.UseStandardSettings
+    Display.UseStandardSettings = function() error("injected reload recovery failure") end
+    assert(compile(cameraSource))()
+    eq(S6Patcher.FPSMode, previous); eq(previous.CleanupPending, true); eq(state.pages, 0)
+    Display.UseStandardSettings = original; GameCallback_Escape()
+    eq(previous.CleanupPending, false); eq(state.camera, 0); eq(state.pages, 0)
+    assert(compile(cameraSource))(); eq(S6Patcher.FPSMode.Enabled, false)
+end)
 test("camera opt-out does not disable other features", function()
     setup(); state.option = 0; S6Patcher.FPSMode.Toggle()
     eq(S6Patcher.FPSMode.Enabled, false); eq(S6Patcher.DisableFeatures, false); eq(state.switches, 0)

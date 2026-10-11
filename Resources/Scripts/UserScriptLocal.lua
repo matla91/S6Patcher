@@ -675,7 +675,8 @@ end
 -- ************************************************************************************************************************************************************* --
 -- A load/restart can execute this script again in the same local Lua state.
 if S6Patcher.FPSMode and (S6Patcher.FPSMode.Enabled or S6Patcher.FPSMode.CleanupPending) then
-	S6Patcher.FPSMode.Disable();
+	-- Keep the old recovery state and callbacks if an engine step failed; Z/Escape can retry.
+	if not S6Patcher.FPSMode.Disable() then return; end
 end
 S6Patcher.FPSMode = {
 	Enabled = false,
