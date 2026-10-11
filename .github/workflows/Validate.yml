@@ -1,0 +1,38 @@
+name: Reliability validation
+
+on:
+  push:
+    branches: [master, 'fix/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.100
+      - name: Compile with analyzers
+        run: dotnet build S6Patcher.csproj -c Debug -warnaserror -p:EnableNETAnalyzers=true
+      - name: Run core and synthetic archive tests
+        run: dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug
+      - name: Install Lua 5.1
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Validate Lua syntax and camera transitions
+        if: runner.os == 'Linux'
+        run: |
+          for script in Resources/Scripts/*.lua; do luac5.1 -p "$script"; done
+          lua5.1 Tests/camera_spec.lua
