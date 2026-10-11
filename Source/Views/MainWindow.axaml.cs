@@ -216,13 +216,19 @@ namespace S6Patcher.Source.Views
             btnChoose.IsEnabled = false;
             btnExit.IsEnabled = false;
 
+            string PreviousDocuments = UserScriptHandler.Instance.GlobalDocuments;
+            bool Completed = false;
             try
             {
+                // Route scripts and settings to the same root that the DCP executable patch will select.
+                if (cbFolderPath.IsChecked == true && MainPatcher.GlobalID != execID.ED)
+                    UserScriptHandler.Instance.UseDocumentsRoot(txtFolderPath.Text);
                 await ViewHelpers.GetPathToOptionsFile();
                 if (MainPatcher.GlobalID != execID.ED && !UserScriptHandler.Instance.DoesUserScriptDirectoryExist())
                     throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
                 await PatchByFeatures();
                 await FinishPatching();
+                Completed = true;
             }
             catch (Exception ex)
             {
@@ -232,6 +238,7 @@ namespace S6Patcher.Source.Views
             }
             finally
             {
+                if (!Completed) UserScriptHandler.Instance.GlobalDocuments = PreviousDocuments;
                 ResetPatcher();
                 btnChoose.IsEnabled = true;
                 btnExit.IsEnabled = true;
@@ -313,18 +320,6 @@ namespace S6Patcher.Source.Views
             if (MainPatcher.GlobalID != execID.ED)
             {
                 await MainPatcher.WriteScriptFilesToFolder(DoNotUseEmbedded);
-            }
-        }
-
-        private async void GetUserExitOption()
-        {
-            ButtonResult Result = await ViewHelpers.ShowPromptMessageBox("Exit", 
-                "Patching is currently in progress! Are you sure you want to exit?");
-
-            if (Result == ButtonResult.Yes)
-            {
-                PatchingInProgress = false;
-                Close();
             }
         }
 

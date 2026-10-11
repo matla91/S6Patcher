@@ -26,6 +26,7 @@ internal static class Program
             await TransactionTests();
             await ModTests();
             await ArchiveTests();
+            await DocumentsTests();
         }
         finally { Directory.Delete(Root, true); }
         Console.WriteLine($"C#: {Count} tests, {Count - Failures} passed, {Failures} failed");
@@ -287,5 +288,22 @@ internal static class Program
         Crypt.Encrypt(Updated,Directory.EncryptionID); Directory.Length=(uint)Updated.Length; Directory.CRC32=Crc32.HashToUInt32(Updated);
         MemoryMarshal.Write(DirBytes,in Directory); Crypt.Encrypt(DirBytes,Header.EncryptionID);
         byte[] Result=new byte[Directory.Offset+Updated.Length]; Image.AsSpan(0,(int)Directory.Offset).CopyTo(Result); DirBytes.CopyTo(Result,BBAHeader.Size); Updated.CopyTo(Result,(int)Directory.Offset); File.WriteAllBytes(Path,Result);
+    }
+
+    private static async Task DocumentsTests()
+    {
+        await Test("custom documents root receives the bundled scripts",async ()=>
+        {
+            string Old=UserScriptHandler.Instance.GlobalDocuments; string Docs=Path.Combine(Root,"relocated-documents"); string Profile=Path.Combine(Docs,"THE SETTLERS - Rise of an Empire");
+            Directory.CreateDirectory(Path.Combine(Profile,"Config")); File.WriteAllText(Path.Combine(Profile,"Config","Options.ini"),"[S6Patcher]\r\n");
+            try
+            {
+                UserScriptHandler.Instance.UseDocumentsRoot(Docs); await UserScriptHandler.Instance.CreateUserScriptFiles(false);
+                Equal(Docs,UserScriptHandler.Instance.GlobalDocuments); Bytes(S6Patcher.Properties.Resources.UserScriptLocal,File.ReadAllBytes(Path.Combine(Profile,"Script","UserScriptLocal.lua")));
+            }
+            finally { UserScriptHandler.Instance.GlobalDocuments=Old; }
+        });
+        Test("invalid custom documents root preserves previous routing",()=>
+        { string Old=UserScriptHandler.Instance.GlobalDocuments; Throws<InvalidDataException>(()=>UserScriptHandler.Instance.UseDocumentsRoot(Root)); Equal(Old,UserScriptHandler.Instance.GlobalDocuments); });
     }
 }

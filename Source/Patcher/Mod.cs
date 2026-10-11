@@ -66,7 +66,7 @@ namespace S6Patcher.Source.Patcher
                     }
                     catch
                     {
-                        Definition.ForEach(async Element => await Element.DisposeAsync());
+                        Definition.ForEach(Element => Element.Dispose());
                         FileDataParser = null;
 
                         Logger.Instance.Log("Downloaded Definition file invalid, falling back to embedded resource ...");
@@ -75,14 +75,12 @@ namespace S6Patcher.Source.Patcher
             }
 
             FileDataParser ??= new BinaryParser("S6Patcher.Definitions.FileData.bin");
-            GlobalFileDataMappings.AddRange(FileDataParser.ParseFileData());
-
-            if (UseGameplayModification)
+            try
             {
-                GlobalFileDataMappings.AddRange(GameplayModification.ModifiableFileData);
+                GlobalFileDataMappings.AddRange(FileDataParser.ParseFileData());
+                if (UseGameplayModification) GlobalFileDataMappings.AddRange(GameplayModification.ModifiableFileData);
             }
-            
-            FileDataParser.Dispose();
+            finally { FileDataParser.Dispose(); }
             
             foreach (var Entry in GlobalFileDataMappings)
             {
@@ -227,17 +225,19 @@ namespace S6Patcher.Source.Patcher
                     continue;
                 }
                 
-                foreach (ModLoaderFile MLF in Element.Value)
+                try
                 {
-                    MLF.Data = ArchiveFile.GetFileDataByDataEntryName(MLF.Name);
-                    if (MLF.Data == null)
+                    foreach (ModLoaderFile MLF in Element.Value)
                     {
-                        ErrorTracking.Increment();
-                        Logger.Instance.Log($"Could NOT parse data from archive file {Element.Key}.");
+                        MLF.Data = ArchiveFile.GetFileDataByDataEntryName(MLF.Name);
+                        if (MLF.Data == null)
+                        {
+                            ErrorTracking.Increment();
+                            Logger.Instance.Log($"Could NOT parse data from archive file {Element.Key}.");
+                        }
                     }
                 }
-
-                IOFileHandler.Instance.CloseStream(ArchiveFileStream);
+                finally { IOFileHandler.Instance.CloseStream(ArchiveFileStream); }
             }
         }
 

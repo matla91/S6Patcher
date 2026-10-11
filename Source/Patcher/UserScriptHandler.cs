@@ -33,6 +33,15 @@ namespace S6Patcher.Source.Patcher
 
         public bool DoesUserScriptDirectoryExist() => GetUserScriptDirectories().Any(Directory => File.Exists(Path.Combine(Directory, "Config", "Options.ini")));
 
+        public void UseDocumentsRoot(string Root)
+        {
+            string FullPath = Path.GetFullPath(Root);
+            if (!Path.IsPathFullyQualified(Root) || !Directory.Exists(FullPath)
+                || !SelectUserScriptDirectories(FullPath).Any(Directory => File.Exists(Path.Combine(Directory, "Config", "Options.ini"))))
+                throw new InvalidDataException("The selected documents root must contain an initialized Settlers 6 profile and its Config/Options.ini. Copy your isolated test profile there before patching.");
+            GlobalDocuments = FullPath;
+        }
+
         public List<string> GetUserScriptDirectories() => !string.IsNullOrEmpty(GlobalDocuments) ? SelectUserScriptDirectories(GlobalDocuments) : [];
 
         private static List<string> SelectUserScriptDirectories(string Documents) => !Directory.Exists(Documents) ? [] : [.. Directory.GetDirectories(Documents)
