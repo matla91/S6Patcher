@@ -194,7 +194,6 @@ namespace S6Patcher.Source.Views
 
         private async Task FinishPatching()
         {
-            MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
             ResetPatcher();
             UncheckFeatureBoxes();
 
@@ -212,14 +211,14 @@ namespace S6Patcher.Source.Views
             ErrorTracking.Reset();
             Logger.Instance.Log("Patching Process Started!");
 
-            DisableUI(false);
-            btnChoose.IsEnabled = false;
-            btnExit.IsEnabled = false;
-
             string PreviousDocuments = UserScriptHandler.Instance.GlobalDocuments;
             bool Completed = false;
             try
             {
+                DisableUI(false);
+                btnChoose.IsEnabled = false;
+                btnExit.IsEnabled = false;
+
                 // Route scripts and settings to the same root that the DCP executable patch will select.
                 if (cbFolderPath.IsChecked == true && MainPatcher.GlobalID != execID.ED)
                     UserScriptHandler.Instance.UseDocumentsRoot(txtFolderPath.Text);
@@ -227,22 +226,34 @@ namespace S6Patcher.Source.Views
                 if (MainPatcher.GlobalID != execID.ED && !UserScriptHandler.Instance.DoesUserScriptDirectoryExist())
                     throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
                 await PatchByFeatures();
-                await FinishPatching();
+                MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
                 Completed = true;
+                await FinishPatching();
             }
             catch (Exception ex)
             {
                 ErrorTracking.Increment();
                 Logger.Instance.Log(ex.ToString());
-                await ShowMessageBox("Patching failed", ex.Message + "\nThe executable was not committed. Auxiliary files may have been updated; see S6Patcher.log.");
+                string Result = Completed
+                    ? "\nThe executable was committed, but finishing the interface failed. Check S6Patcher.log before retrying."
+                    : "\nThe executable was not committed. Auxiliary files may have been updated; see S6Patcher.log.";
+                await ShowMessageBox(Completed ? "Patching completed with an interface error" : "Patching failed", ex.Message + Result);
             }
             finally
             {
                 if (!Completed) UserScriptHandler.Instance.GlobalDocuments = PreviousDocuments;
-                ResetPatcher();
-                btnChoose.IsEnabled = true;
-                btnExit.IsEnabled = true;
-                PatchingInProgress = false;
+                try { ResetPatcher(); }
+                catch (Exception ex)
+                {
+                    ErrorTracking.Increment();
+                    Logger.Instance.Log("Patcher cleanup failed: " + ex);
+                }
+                finally
+                {
+                    btnChoose.IsEnabled = true;
+                    btnExit.IsEnabled = true;
+                    PatchingInProgress = false;
+                }
                 Logger.Instance.Log($"Patching Process Finished! Amount of Errors: {ErrorTracking.Count}");
             }
         }
@@ -359,8 +370,9 @@ namespace S6Patcher.Source.Views
 
         private void ResetPatcher()
         {
-            MainPatcher?.Dispose();
+            var Previous = MainPatcher;
             MainPatcher = null;
+            Previous?.Dispose();
         }
 
         private void btnArchiveUnpack_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e) => UnpackArchiveFileWrapper();
