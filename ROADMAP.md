@@ -14,6 +14,10 @@ Il reste à confronter ces deux corrections au corpus légal et au moteur réel.
 Les trois interventions prioritaires ci-dessous, dont la transaction globale,
 ne sont pas commencées par cette suite.
 
+## Mise à jour — récupération HE Steam (12 octobre 2026)
+
+La branche consolidée protège désormais la bascule du dossier modloader/shr avec un répertoire de récupération déterministe `.s6patcher-recovery`. Une interruption entre le déplacement de l'ancien dossier et l'activation du nouveau est récupérée au prochain appel à Mod.Create ; si les deux dossiers existent, l'opération est bloquée sans supprimer les preuves. Trois tests sur dossiers synthétiques exercent le rollback, la reprise et l'état ambigu. Cela ne constitue **pas** une transaction globale EXE/scripts/INI/mod : les écritures des scripts et des options peuvent rester partielles après interruption. Un arrêt pendant la suppression du répertoire de récupération peut également nécessiter une intervention manuelle. Les validations en jeu restent nécessaires.
+
 ## Trois prochaines interventions
 
 | Ordre | Intervention | Bénéfice / effort | Dépendance et critère d'acceptation |
