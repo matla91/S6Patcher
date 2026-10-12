@@ -230,7 +230,7 @@ namespace S6Patcher.Source.Views
                     throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
                 if (MainPatcher.GlobalID == execID.HE_STEAM)
                 {
-                    string executable = txtPath.Text;
+                    string executable = MainPatcher.ExecutablePath;
                     var profileDirs = UserScriptHandler.Instance.GetUserScriptDirectories();
                     string[] scriptNames = ["UserScriptLocal.lua", "UserScriptGlobal.lua", "EMXBinData.s6patcher"];
                     var files = new List<string> { executable };
