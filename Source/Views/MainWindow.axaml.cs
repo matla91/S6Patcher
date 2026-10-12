@@ -63,12 +63,12 @@ namespace S6Patcher.Source.Views
 
         private async Task ShouldUseRegistryPath(string RegistryPath)
         {
-            Logger.Instance.Log("Found registry path: " + RegistryPath);
+            Logger.Instance.Log("Installation path found in registry.");
 
             RegistryPath = Path.Combine(RegistryPath, "base", "bin", "Settlers6.exe");
             if (!File.Exists(RegistryPath))
             {
-                Logger.Instance.Log("Registry path is invalid: " + RegistryPath);
+                Logger.Instance.Log("Registry installation path does not contain a supported executable.");
                 return;
             }
 
@@ -254,7 +254,7 @@ namespace S6Patcher.Source.Views
                     btnExit.IsEnabled = true;
                     PatchingInProgress = false;
                 }
-                Logger.Instance.Log($"Patching Process Finished! Amount of Errors: {ErrorTracking.Count}");
+                Logger.Instance.Log($"Patching process ended: executable committed={Completed}; reported errors={ErrorTracking.Count}.");
             }
         }
 
@@ -451,7 +451,7 @@ namespace S6Patcher.Source.Views
             string ArchiveFileName = FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + FileExtension;
             bool Result = await Archives.PackFolderFilesIntoArchiveFileAsync(FolderPath, ArchiveFileName);
 
-            Message = $"Packed folder {Path.GetDirectoryName(FolderPath)} into archive file {Path.GetFileName(ArchiveFileName)}.";
+            Message = Result ? $"Archive created: {Path.GetFileName(ArchiveFileName)}." : "Archive creation did not complete successfully.";
             Message += "\n\n" + (Result ? "No errors occured!" : "An error occured!");
             await ShowMessageBox("Packing Archive File ...", Message);
         }
