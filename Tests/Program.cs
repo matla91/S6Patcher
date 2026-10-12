@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Runtime.InteropServices;
 using System.IO.Hashing;
+using System.Xml;
 using S6Packer.Source;
 using Utility = S6Patcher.Source.Utilities.Utility;
 using S6Patcher.Source.Patcher;
@@ -23,6 +24,7 @@ internal static class Program
             ValidationTests();
             OptionsAndPathTests();
             FileDataTests();
+            GameplayXmlTests();
             await TransactionTests();
             await ModTests();
             await ArchiveTests();
@@ -196,6 +198,251 @@ internal static class Program
         { foreach (byte[] D in new byte[][] {[3], [0,1,2], [2,1], [2,255,255,255,255]}) { FileDataEntry E = new() {Data=new() {{2,D}}}; Throws<InvalidDataException>(() => FileDataPatches.Apply(E,[0,1,2])); } });
         Test("FileData allows insertion at EOF", () =>
         { FileDataEntry E = new() {Data = new() {{2,[1,7]}}}; Bytes([1,2,7],FileDataPatches.Apply(E,[1,2])); });
+    }
+    private static void XmlTest(string Name, Action Body) => Test("XML " + Name, () =>
+    {
+        GameplayModification.ClearModifiableFileData();
+        try { Body(); }
+        finally { GameplayModification.ClearModifiableFileData(); }
+    });
+    private static FileDataEntry XmlEntry(string FilePath) => GameplayModification.ModifiableFileData.Single(E => E.FilePath == FilePath);
+    private static XmlDocument ApplyXml(FileDataEntry Entry, string Content)
+    {
+        byte[] Result = GameplayModification.UpdateFileContent(Entry, Encoding.UTF8.GetBytes(Content));
+        XmlDocument Document = new();
+        using MemoryStream Stream = new(Result);
+        Document.Load(Stream);
+        return Document;
+    }
+    private static string XmlValues(XmlDocument Document, string XPath) => string.Join(',', Document.SelectNodes(XPath)!.Cast<XmlNode>().Select(N => N.InnerText));
+    private static string XmlItems(string Tag, params uint[] Values) => string.Concat(Values.Select(V => $"<{Tag}>{V}</{Tag}>"));
+    private static string XmlColor(uint Red, uint Green, uint Blue) => $"<Color><Red>{Red}</Red><Green>{Green}</Green><Blue>{Blue}</Blue></Color>";
+    private static void XmlReject(FileDataEntry Entry, string Content)
+    {
+        byte[] Source = Encoding.UTF8.GetBytes(Content), Before = Source.ToArray();
+        string Destination = Path.Combine(Root, "xml-destination.xml");
+        File.WriteAllText(Destination, "previous complete file");
+        try
+        {
+            byte[] Result = GameplayModification.UpdateFileContent(Entry, Source);
+            File.WriteAllBytes(Destination, Result);
+            throw new Exception("Expected explicit XML failure before destination write");
+        }
+        catch (InvalidDataException Ex)
+        {
+            Equal(true, Ex.Message.Contains(Entry.FilePath, StringComparison.Ordinal));
+        }
+        Bytes(Before, Source);
+        Equal("previous complete file", File.ReadAllText(Destination));
+    }
+    private static void GameplayXmlTests()
+    {
+        XmlTest("color edits the first two complete records and preserves remaining colors and metadata", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlDocument D = ApplyXml(XmlEntry("config\\playercolor.xml"), "<Colors title='été'>\n<!-- keep -->" + XmlColor(9, 8, 7) + XmlColor(1, 2, 3) + XmlColor(4, 5, 6) + "</Colors>");
+            Equal("0,17,4", XmlValues(D, "/Colors/Color/Red"));
+            Equal("0,7,5", XmlValues(D, "/Colors/Color/Green"));
+            Equal("0,216,6", XmlValues(D, "/Colors/Color/Blue"));
+            Equal("été", D.DocumentElement!.GetAttribute("title"));
+            Equal(1, D.SelectNodes("/Colors/comment()")!.Count);
+        });
+        XmlTest("RGB homonyms outside Color are not player channels", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlDocument D = ApplyXml(XmlEntry("config\\playercolor.xml"), "<Colors><Preview><Red>91</Red><Green>92</Green><Blue>93</Blue></Preview>" + XmlColor(9, 8, 7) + XmlColor(1, 2, 3) + "</Colors>");
+            Equal("91", XmlValues(D, "/Colors/Preview/Red"));
+            Equal("0,17", XmlValues(D, "/Colors/Color/Red"));
+            Equal("0,7", XmlValues(D, "/Colors/Color/Green"));
+            Equal("0,216", XmlValues(D, "/Colors/Color/Blue"));
+        });
+        XmlTest("missing selected RGB channel cannot shift values into another player", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Colors><Color><Red>1</Red><Blue>3</Blue></Color>" + XmlColor(4, 5, 6) + XmlColor(7, 8, 9) + "</Colors>");
+        });
+        XmlTest("existing default namespace remains compatible", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlDocument D = ApplyXml(XmlEntry("config\\playercolor.xml"), "<Colors xmlns='urn:game'>" + XmlColor(1, 2, 3) + XmlColor(4, 5, 6) + "</Colors>");
+            Equal("urn:game", D.DocumentElement!.NamespaceURI);
+            Equal("0,17", string.Join(',', D.GetElementsByTagName("Red").Cast<XmlNode>().Select(N => N.InnerText)));
+        });
+        XmlTest("foreign namespace homonyms are preserved instead of becoming player records", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlDocument D = ApplyXml(XmlEntry("config\\playercolor.xml"), "<Colors xmlns='urn:game'><Color xmlns='urn:other'><Red>91</Red><Green>92</Green><Blue>93</Blue></Color>" + XmlColor(1, 2, 3) + XmlColor(4, 5, 6) + "</Colors>");
+            Equal("91", D.GetElementsByTagName("Red", "urn:other")[0]!.InnerText);
+            Equal("0,17", string.Join(',', D.GetElementsByTagName("Red", "urn:game").Cast<XmlNode>().Select(N => N.InnerText)));
+        });
+        XmlTest("duplicate RGB channel is ambiguous", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Colors><Color><Red>1</Red><Red>2</Red><Green>3</Green><Blue>4</Blue></Color>" + XmlColor(5, 6, 7) + "</Colors>");
+        });
+        XmlTest("two Color collections with identical ancestor names are ambiguous", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Root><Colors>" + XmlColor(1, 2, 3) + "</Colors><Colors>" + XmlColor(4, 5, 6) + "</Colors></Root>");
+        });
+        XmlTest("RGB values outside a Color record cannot replace missing records", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Colors><Red>1</Red><Green>2</Green><Blue>3</Blue><Red>4</Red><Green>5</Green><Blue>6</Blue></Colors>");
+        });
+        XmlTest("a structured RGB target cannot be replaced by scalar text", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Colors><Color><Red><Value>1</Value></Red><Green>2</Green><Blue>3</Blue></Color>" + XmlColor(4, 5, 6) + "</Colors>");
+        });
+        XmlTest("settler limits retain the documented five ordinal slots", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            Equal("50,60,120,180,240", XmlValues(ApplyXml(XmlEntry("config\\logic.xml"), "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>"), "//SettlerLimit"));
+        });
+        XmlTest("settler ordinal contract does not invent parent names", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlDocument D = ApplyXml(XmlEntry("config\\logic.xml"), "<Logic><NoCathedral><SettlerLimit>1</SettlerLimit></NoCathedral><Upgrades>" + XmlItems("SettlerLimit", 2, 3, 4, 5) + "</Upgrades></Logic>");
+            Equal("50,60,120,180,240", XmlValues(D, "//SettlerLimit"));
+        });
+        XmlTest("missing final settler slot rejects the whole file", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4) + "</Logic>");
+        });
+        XmlTest("extra settler slot is ambiguous rather than silently ignored", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5, 6) + "</Logic>");
+        });
+        XmlTest("missing all settler slots has an explicit failure", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<Logic><Other>1</Other></Logic>");
+        });
+        XmlTest("structured settler limit rejects before changing earlier slots", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4) + "<SettlerLimit><Nested>5</Nested></SettlerLimit></Logic>");
+        });
+        XmlTest("soldier limits update all five castles and ignore other Limit contexts", () =>
+        {
+            GameplayModification.ModifySoldierLimits([26, 44, 62, 92]);
+            Equal(5, GameplayModification.ModifiableFileData.Count);
+            foreach (FileDataEntry E in GameplayModification.ModifiableFileData)
+            {
+                XmlDocument D = ApplyXml(E, "<Entity><Other><Limit>999</Limit></Other><SoldierLimits>" + XmlItems("Limit", 1, 2, 3, 4) + "</SoldierLimits></Entity>");
+                Equal("26,44,62,92", XmlValues(D, "/Entity/SoldierLimits/Limit"));
+                Equal("999", XmlValues(D, "/Entity/Other/Limit"));
+            }
+        });
+        XmlTest("multiple SoldierLimits cannot be concatenated into four slots", () =>
+        {
+            GameplayModification.ModifySoldierLimits([26, 44, 62, 92]);
+            XmlReject(GameplayModification.ModifiableFileData[0], "<Entity><SoldierLimits>" + XmlItems("Limit", 1, 2) + "</SoldierLimits><SoldierLimits>" + XmlItems("Limit", 3, 4) + "</SoldierLimits></Entity>");
+        });
+        XmlTest("Limit nodes in the wrong context cannot replace a missing SoldierLimits", () =>
+        {
+            GameplayModification.ModifySoldierLimits([26, 44, 62, 92]);
+            XmlReject(GameplayModification.ModifiableFileData[0], "<Entity><Other>" + XmlItems("Limit", 1, 2, 3, 4) + "</Other></Entity>");
+        });
+        XmlTest("nested Limit nodes cannot replace direct soldier slots", () =>
+        {
+            GameplayModification.ModifySoldierLimits([26, 44, 62, 92]);
+            XmlReject(GameplayModification.ModifiableFileData[0], "<Entity><SoldierLimits><Wrapper>" + XmlItems("Limit", 1, 2, 3, 4) + "</Wrapper></SoldierLimits></Entity>");
+        });
+        XmlTest("extra direct soldier slot rejects rather than ignoring it", () =>
+        {
+            GameplayModification.ModifySoldierLimits([26, 44, 62, 92]);
+            XmlReject(GameplayModification.ModifiableFileData[0], "<Entity><SoldierLimits>" + XmlItems("Limit", 1, 2, 3, 4, 5) + "</SoldierLimits></Entity>");
+        });
+        XmlTest("storehouse limits update one four-slot container and preserve other capacities", () =>
+        {
+            GameplayModification.ModifyStorehouseLimits([300, 600, 1200, 2400]);
+            XmlDocument D = ApplyXml(XmlEntry("config\\entities\\b_storehouse.xml"), "<Entity><Other><OutStockCapacity>999</OutStockCapacity></Other><OutStockCapacities>" + XmlItems("OutStockCapacity", 1, 2, 3, 4) + "</OutStockCapacities></Entity>");
+            Equal("300,600,1200,2400", XmlValues(D, "/Entity/OutStockCapacities/OutStockCapacity"));
+            Equal("999", XmlValues(D, "/Entity/Other/OutStockCapacity"));
+        });
+        XmlTest("multiple OutStockCapacities cannot be concatenated into four slots", () =>
+        {
+            GameplayModification.ModifyStorehouseLimits([300, 600, 1200, 2400]);
+            XmlReject(XmlEntry("config\\entities\\b_storehouse.xml"), "<Entity><OutStockCapacities>" + XmlItems("OutStockCapacity", 1, 2) + "</OutStockCapacities><OutStockCapacities>" + XmlItems("OutStockCapacity", 3, 4) + "</OutStockCapacities></Entity>");
+        });
+        XmlTest("storehouse dependency retains only the first Worth ordinal edit", () =>
+        {
+            GameplayModification.ModifyStorehouseLimits([300, 600, 1200, 2400]);
+            XmlDocument D = ApplyXml(XmlEntry("config\\goodsex.xml"), "<Goods><Good id='first'><Worth>7</Worth></Good><Good id='second'><Worth>8</Worth></Good></Goods>");
+            Equal("0,8", XmlValues(D, "//Worth"));
+            Equal("second", D.SelectSingleNode("/Goods/Good[2]")!.Attributes!["id"]!.Value);
+        });
+        XmlTest("missing mandatory Worth does not announce success", () =>
+        {
+            GameplayModification.ModifyStorehouseLimits([300, 600, 1200, 2400]);
+            XmlReject(XmlEntry("config\\goodsex.xml"), "<Goods><Good><Other>7</Other></Good></Goods>");
+        });
+        XmlTest("structured first Worth cannot lose its child elements", () =>
+        {
+            GameplayModification.ModifyStorehouseLimits([300, 600, 1200, 2400]);
+            XmlReject(XmlEntry("config\\goodsex.xml"), "<Goods><Worth><Amount>7</Amount></Worth><Worth>8</Worth></Goods>");
+        });
+        XmlTest("malformed XML includes the file in its diagnostic", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<Logic><SettlerLimit>1</Logic>");
+        });
+        XmlTest("DTD remains forbidden and its failure includes the file", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            XmlReject(XmlEntry("config\\logic.xml"), "<!DOCTYPE Logic [<!ENTITY value '1'>]><Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>");
+        });
+        XmlTest("out-of-range modification index has an explicit failure", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            FileDataEntry E = XmlEntry("config\\logic.xml"); E.Data.Add(uint.MaxValue, []);
+            XmlReject(E, "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>");
+        });
+        XmlTest("modification indices belonging to another file are refused", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            FileDataEntry E = XmlEntry("config\\logic.xml"); E.FilePath = "config\\other.xml";
+            XmlReject(E, "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>");
+        });
+        XmlTest("an empty operation mapping cannot report an update", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            FileDataEntry E = XmlEntry("config\\logic.xml"); E.Data.Clear();
+            XmlReject(E, "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>");
+        });
+        XmlTest("missing operation mapping cannot silently apply a subset", () =>
+        {
+            GameplayModification.ModifySettlerLimits([60, 120, 180, 240]);
+            FileDataEntry E = XmlEntry("config\\logic.xml"); E.Data.Remove(E.Data.Keys.Max());
+            XmlReject(E, "<Logic>" + XmlItems("SettlerLimit", 1, 2, 3, 4, 5) + "</Logic>");
+        });
+        XmlTest("an entirely missing RGB operation group cannot report partial success", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            FileDataEntry E = XmlEntry("config\\playercolor.xml");
+            E.Data.Remove(1); E.Data.Remove(4);
+            XmlReject(E, "<Colors>" + XmlColor(1, 2, 3) + XmlColor(4, 5, 6) + "</Colors>");
+        });
+        XmlTest("duplicate configuration cannot target successive unrelated colors", () =>
+        {
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(17, 7, 216));
+            GameplayModification.ModifyPlayerColor(Avalonia.Media.Color.FromRgb(18, 8, 217));
+            XmlReject(XmlEntry("config\\playercolor.xml"), "<Colors>" + XmlColor(1, 2, 3) + XmlColor(4, 5, 6) + XmlColor(7, 8, 9) + XmlColor(10, 11, 12) + "</Colors>");
+        });
+        XmlTest("limit registration requires four values before creating file operations", () =>
+        {
+            foreach (Action<uint[]> Register in new Action<uint[]>[] { GameplayModification.ModifySettlerLimits, GameplayModification.ModifySoldierLimits, GameplayModification.ModifyStorehouseLimits })
+            {
+                Throws<ArgumentNullException>(() => Register(null!));
+                foreach (uint[] Invalid in new uint[][] { [], [1, 2, 3], [1, 2, 3, 4, 5] })
+                    Throws<ArgumentException>(() => Register(Invalid));
+                Equal(0, GameplayModification.ModifiableFileData.Count);
+            }
+        });
     }
     private static async Task TransactionTests()
     {
