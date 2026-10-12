@@ -482,6 +482,41 @@ internal static class Program
     { public GamePatcher Value {get;} public GamePatcherScope(string Path) => Value=new(Path); public void Dispose()=>Value.Dispose(); }
     private static async Task ModTests()
     {
+        Test("HE mod swap rolls back after injected failure", () =>
+        {
+            string parent = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            string active = Path.Combine(parent, "shr"), staged = Path.Combine(parent, "staged");
+            Directory.CreateDirectory(active); Directory.CreateDirectory(staged);
+            File.WriteAllText(Path.Combine(active, "old.txt"), "original");
+            File.WriteAllText(Path.Combine(staged, "new.txt"), "replacement");
+            Throws<IOException>(() => Mod.InstallStagedDirectory(staged, active,
+                () => throw new IOException("injected crash before activation")));
+            Equal("original", File.ReadAllText(Path.Combine(active, "old.txt")));
+            Equal(false, Directory.Exists(active + ".s6patcher-recovery"));
+            Equal(true, Directory.Exists(staged));
+        });
+        Test("HE mod recovers interrupted directory swap on next run", () =>
+        {
+            string parent = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(parent);
+            string active = Path.Combine(parent, "shr");
+            string previous = active + ".s6patcher-recovery";
+            Directory.CreateDirectory(previous);
+            File.WriteAllText(Path.Combine(previous, "old.txt"), "original");
+            Mod.RecoverInterruptedInstall(active);
+            Equal("original", File.ReadAllText(Path.Combine(active, "old.txt")));
+            Equal(false, Directory.Exists(previous));
+        });
+        Test("HE mod refuses ambiguous two-directory recovery state", () =>
+        {
+            string parent = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            string active = Path.Combine(parent, "shr");
+            Directory.CreateDirectory(active);
+            Directory.CreateDirectory(active + ".s6patcher-recovery");
+            Throws<IOException>(() => Mod.RecoverInterruptedInstall(active));
+            Equal(true, Directory.Exists(active));
+            Equal(true, Directory.Exists(active + ".s6patcher-recovery"));
+        });
         await Test("failed first HE Steam mod install does not create active shr", async () =>
         {
             string F = Executable(execID.HE_STEAM);
