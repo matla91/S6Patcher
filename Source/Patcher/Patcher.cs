@@ -18,6 +18,8 @@ namespace S6Patcher.Source.Patcher
         private readonly Mappings GlobalMappings;
         public readonly Mod GlobalMod;
 
+        internal string ExecutablePath => Transaction.TargetPath;
+
         public readonly execID GlobalID;
         private readonly Lock WriteLock = new();
 
