@@ -19,6 +19,7 @@ internal static class Program
         Directory.CreateDirectory(Root);
         try
         {
+            LoggerTests.Run(Test, Root);
             ParserTests();
             MappingTests();
             ValidationTests();
