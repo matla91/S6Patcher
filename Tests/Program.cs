@@ -130,6 +130,23 @@ internal static class Program
             Equal(false, PatchSessionRecovery.Recover(exe));
             Equal("after", File.ReadAllText(exe));
         });
+        Test("HE recovery preflights every backup before mutating files", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            string ini = Path.Combine(root, "Options.ini");
+            File.WriteAllText(exe, "old exe");
+            File.WriteAllText(ini, "old ini");
+            _ = PatchSessionRecovery.Begin(exe, [exe, ini], []);
+            File.WriteAllText(exe, "new exe");
+            File.WriteAllText(ini, "new ini");
+            File.Delete(Path.Combine(PatchSessionRecovery.JournalPath(exe), "0000.file"));
+            Throws<IOException>(() => PatchSessionRecovery.Recover(exe));
+            Equal("new exe", File.ReadAllText(exe));
+            Equal("new ini", File.ReadAllText(ini));
+            Equal(true, Directory.Exists(PatchSessionRecovery.JournalPath(exe)));
+        });
         Test("HE recovery refuses incomplete journal instead of guessing", () =>
         {
             string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
