@@ -482,6 +482,17 @@ internal static class Program
     { public GamePatcher Value {get;} public GamePatcherScope(string Path) => Value=new(Path); public void Dispose()=>Value.Dispose(); }
     private static async Task ModTests()
     {
+        await Test("failed first HE Steam mod install does not create active shr", async () =>
+        {
+            string F = Executable(execID.HE_STEAM);
+            string Dir = IOFileHandler.Instance.GetModLoaderDirectory(execID.HE_STEAM, F);
+            string Active = Path.Combine(Dir, "shr");
+            Equal(false, Directory.Exists(Active));
+            Mod M = new(execID.HE_STEAM, F);
+            try { await M.Create(true, false, false); throw new Exception("Expected failure with missing game assets"); }
+            catch (IOException) { }
+            Equal(false, Directory.Exists(Active));
+        });
         await Test("missing mod sources retain previous bugfix files", async () =>
         {
             string F = Executable(execID.HE_UBISOFT); string Dir=IOFileHandler.Instance.GetModLoaderDirectory(execID.HE_UBISOFT,F);
