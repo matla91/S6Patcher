@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -14,13 +15,32 @@ internal static class Program
     private static int Count, Failures;
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "s6patcher-tests-" + Guid.NewGuid().ToString("N"));
 
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--recovery-crash-child")
+        {
+            string dir = args[1];
+            string exe = Path.Combine(dir, "Settlers6.exe");
+            string ini = Path.Combine(dir, "Options.ini");
+            string script = Path.Combine(dir, "UserScriptGlobal.lua");
+            string mod = Path.Combine(dir, "shr");
+            _ = PatchSessionRecovery.Begin(exe, [exe, ini, script], [mod]);
+            File.WriteAllText(exe, "modified executable");
+            File.WriteAllText(ini, "modified options");
+            File.WriteAllText(script, "new script");
+            Directory.Delete(mod, true);
+            Directory.CreateDirectory(mod);
+            File.WriteAllText(Path.Combine(mod, "new.txt"), "modified mod");
+            File.WriteAllText(Path.Combine(dir, "child-ready"), "ready");
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+            return 0;
+        }
         Directory.CreateDirectory(Root);
         try
         {
             LoggerTests.Run(Test, Root);
             RecoveryTests();
+            CrashRecoveryTests();
             ParserTests();
             MappingTests();
             ValidationTests();
@@ -167,6 +187,55 @@ internal static class Program
             Directory.CreateDirectory(PatchSessionRecovery.JournalPath(exe));
             Throws<InvalidDataException>(() => PatchSessionRecovery.Recover(exe));
             Equal("original", File.ReadAllText(exe));
+        });
+    }
+
+    private static void CrashRecoveryTests()
+    {
+        Test("HE hard-killed child restores executable, scripts, INI and mod", () =>
+        {
+            string dir = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string exe = Path.Combine(dir, "Settlers6.exe");
+            string ini = Path.Combine(dir, "Options.ini");
+            string script = Path.Combine(dir, "UserScriptGlobal.lua");
+            string mod = Path.Combine(dir, "shr");
+            File.WriteAllText(exe, "original executable");
+            File.WriteAllText(ini, "original options");
+            Directory.CreateDirectory(mod);
+            File.WriteAllText(Path.Combine(mod, "old.txt"), "original mod");
+
+            var start = new ProcessStartInfo("dotnet") { UseShellExecute = false };
+            start.ArgumentList.Add(typeof(Program).Assembly.Location);
+            start.ArgumentList.Add("--recovery-crash-child");
+            start.ArgumentList.Add(dir);
+            using Process child = Process.Start(start) ?? throw new Exception("Cannot start recovery child");
+            try
+            {
+                bool ready = SpinWait.SpinUntil(
+                    () => File.Exists(Path.Combine(dir, "child-ready")) || child.HasExited,
+                    TimeSpan.FromSeconds(25));
+                if (!ready || child.HasExited)
+                    throw new Exception("Recovery child did not reach pending transaction state");
+                child.Kill(entireProcessTree: true);
+                if (!child.WaitForExit(15000)) throw new Exception("Killed child failed to exit");
+                Equal("modified executable", File.ReadAllText(exe));
+                Equal(true, PatchSessionRecovery.Recover(exe));
+                Equal("original executable", File.ReadAllText(exe));
+                Equal("original options", File.ReadAllText(ini));
+                Equal(false, File.Exists(script));
+                Equal("original mod", File.ReadAllText(Path.Combine(mod, "old.txt")));
+                Equal(false, File.Exists(Path.Combine(mod, "new.txt")));
+                Equal(false, Directory.Exists(PatchSessionRecovery.JournalPath(exe)));
+            }
+            finally
+            {
+                if (!child.HasExited)
+                {
+                    child.Kill(entireProcessTree: true);
+                    child.WaitForExit(15000);
+                }
+            }
         });
     }
 
