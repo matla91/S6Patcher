@@ -27,7 +27,19 @@ jobs:
       - name: Compile with analyzers
         run: dotnet build S6Patcher.csproj -c Debug -warnaserror -p:EnableNETAnalyzers=true
       - name: Run core and synthetic archive tests
-        run: dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug
+        id: core_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug | tee core-results.log
+          result=$(grep -E '^C#: [0-9]+ tests, [0-9]+ passed, [0-9]+ failed$' core-results.log)
+          if [[ "$result" == *$'\n'* ]]; then exit 1; fi
+          printf 'result=%s\n' "$result" >> "$GITHUB_OUTPUT"
+      - name: 'Core test result: ${{ steps.core_tests.outputs.result }}'
+        shell: bash
+        env:
+          S6_CORE_TEST_RESULT: ${{ steps.core_tests.outputs.result }}
+        run: printf '%s\n' "$S6_CORE_TEST_RESULT"
       - name: Build Windows release package with trimming
         if: runner.os == 'Windows'
         run: dotnet publish S6Patcher.csproj -c Release -r win-x64 -o development-build
