@@ -29,6 +29,22 @@ namespace S6Patcher.Source.Utilities
             catch { Dispose(); throw; }
         }
 
+        // Copy using the handle already held exclusively by this transaction.
+        // Reopening the target via File.Copy fails under Windows FileShare.None.
+        internal void CopyOriginalTo(string destination)
+        {
+            if (Original == null) throw new InvalidOperationException("Executable transaction is already closed.");
+            long position = Original.Position;
+            try
+            {
+                Original.Position = 0;
+                using FileStream copy = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                Original.CopyTo(copy);
+                copy.Flush(true);
+            }
+            finally { Original.Position = position; }
+        }
+
         public void Commit()
         {
             if (Committed || Original == null) throw new InvalidOperationException("Executable transaction is already closed.");
