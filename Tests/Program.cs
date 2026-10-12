@@ -130,6 +130,17 @@ internal static class Program
             Equal(false, PatchSessionRecovery.Recover(exe));
             Equal("after", File.ReadAllText(exe));
         });
+        Test("HE session snapshots original EXE despite exclusive Windows file lock", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            File.WriteAllText(exe, "locked original executable");
+            using var transaction = new ExecutableTransaction(exe);
+            using var session = PatchSessionRecovery.Begin(exe, [exe], [], transaction.CopyOriginalTo);
+            Equal("locked original executable", File.ReadAllText(Path.Combine(PatchSessionRecovery.JournalPath(exe), "0000.file")));
+            session.Commit();
+        });
         Test("HE recovery preflights every backup before mutating files", () =>
         {
             string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
