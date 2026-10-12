@@ -30,7 +30,7 @@ namespace S6Patcher.Source.Utilities
 
         internal static string JournalPath(string executable) => Path.GetFullPath(executable) + JournalSuffix;
 
-        internal static PatchSessionRecovery Begin(string executable, IEnumerable<string> files, IEnumerable<string> directories)
+        internal static PatchSessionRecovery Begin(string executable, IEnumerable<string> files, IEnumerable<string> directories, Action<string> copyLockedExecutable = null)
         {
             string journal = JournalPath(executable);
             if (Directory.Exists(journal)) throw new IOException("A previous patch session needs recovery before starting.");
@@ -44,7 +44,12 @@ namespace S6Patcher.Source.Utilities
                 {
                     string backup = index++.ToString("D4") + ".file";
                     bool exists = File.Exists(path);
-                    if (exists) File.Copy(path, Path.Combine(journal, backup));
+                    if (exists)
+                    {
+                        if (copyLockedExecutable != null && Path.GetFullPath(path) == Path.GetFullPath(executable))
+                            copyLockedExecutable(Path.Combine(journal, backup));
+                        else File.Copy(path, Path.Combine(journal, backup));
+                    }
                     manifest.Items.Add(new Snapshot { Path = path, Existed = exists, Directory = false, Backup = backup });
                 }
                 foreach (string path in directories.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase))
