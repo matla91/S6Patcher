@@ -89,6 +89,23 @@ namespace S6Patcher.Source.Utilities
                 return false;
             }
             if (manifest.State != "pending") throw new InvalidDataException("Unknown patch recovery state.");
+            // Check the entire journal before touching any target. A missing later
+            // snapshot must not lead to a partially restored installation.
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var backups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Snapshot item in manifest.Items)
+            {
+                if (item.Path == null || !Path.IsPathFullyQualified(item.Path) ||
+                    !targets.Add(Path.GetFullPath(item.Path)))
+                    throw new InvalidDataException("Invalid or duplicate recovery target.");
+                if (string.IsNullOrWhiteSpace(item.Backup) ||
+                    Path.GetFileName(item.Backup) != item.Backup ||
+                    !backups.Add(item.Backup))
+                    throw new InvalidDataException("Invalid or duplicate recovery backup name.");
+                string backupPath = Path.Combine(journal, item.Backup);
+                if (item.Existed && !(item.Directory ? Directory.Exists(backupPath) : File.Exists(backupPath)))
+                    throw new IOException("Incomplete recovery snapshots; no target was modified.");
+            }
             foreach (Snapshot item in manifest.Items.AsEnumerable().Reverse())
             {
                 string backup = Path.Combine(journal, item.Backup);
