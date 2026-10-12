@@ -25,3 +25,7 @@ Keep the feature in draft until an isolated Windows process-kill/relaunch matrix
 Before restoring any target, recovery now validates every named snapshot and rejects missing, duplicated or malformed entries without changing the installation. For Steam HE, the EXE snapshot is taken through the already-open transaction stream, because Windows refuses to reopen the exclusively locked executable. The GUI takes the canonical executable path from the transaction, not the mutable path textbox. A separate test exercises the exclusive-lock snapshot, and another verifies that a missing earlier backup causes no partial rollback.
 
 These protections are not proof of durability under arbitrary power loss, concurrent Steam writes or directory symlink manipulation. A forced process-termination matrix on a disposable Windows game copy remains necessary before claiming P10 fully validated.
+
+## Process-termination regression
+
+The C# harness now starts a separate .NET process against an entirely synthetic HE-like tree, waits for its explicit marker after a persisted pending journal and modified EXE/INI/script/mod files, forcibly terminates the child process, then invokes the same recovery method and compares all pre-session contents. The regression runs in the existing Windows and Linux Actions matrix. It exercises abrupt process death after writes, **not** a power cut, mid-write crash, nor an actual installation of the commercial game. Timeout and child cleanup ensure CI does not hang indefinitely.
