@@ -34,8 +34,9 @@ jobs:
       - name: Install Lua 5.1
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
-      - name: Validate Lua syntax and camera transitions
+      - name: Validate Lua syntax, camera transitions and hook restoration
         if: runner.os == 'Linux'
         run: |
           for script in Resources/Scripts/*.lua; do luac5.1 -p "$script"; done
           lua5.1 Tests/camera_spec.lua
+          lua5.1 Tests/hooks_spec.lua
