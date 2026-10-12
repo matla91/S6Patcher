@@ -40,6 +40,8 @@ jobs:
         env:
           S6_CORE_TEST_RESULT: ${{ steps.core_tests.outputs.result }}
         run: printf '%s\n' "$S6_CORE_TEST_RESULT"
+      - name: Measure synthetic performance baseline (informational)
+        run: dotnet run --project Tests/S6Patcher.Tests.csproj -c Release -- --benchmark
       - name: Build Windows release package with trimming
         if: runner.os == 'Windows'
         run: dotnet publish S6Patcher.csproj -c Release -r win-x64 -o development-build
