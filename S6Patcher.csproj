@@ -110,6 +110,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="Tests\**" />
+    <EmbeddedResource Remove="Tests\**" />
+    <None Remove="Tests\**" />
     <Compile Remove="Source\Archive\obj\**" />
     <Content Remove="Source\Archive\obj\**" />
     <EmbeddedResource Remove="Source\Archive\obj\**" />

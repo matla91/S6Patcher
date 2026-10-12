@@ -20,10 +20,27 @@ namespace S6Patcher.Source.Patcher
 
         public execID Validate()
         {
+            // The game executables are PE32/i386 images, even when the patcher itself is 64-bit.
+            using BinaryReader Reader = new(Stream, Encoding.UTF8, leaveOpen: true);
+            if (Stream.Length < 64 || Reader.ReadUInt16() != 0x5A4D)
+                throw new InvalidDataException("Unsupported executable: DOS/PE header is missing.");
+            Stream.Position = 0x3C;
+            uint PE = Reader.ReadUInt32();
+            if (PE > Stream.Length - 26) throw new InvalidDataException("Unsupported executable: truncated PE header.");
+            Stream.Position = PE;
+            if (Reader.ReadUInt32() != 0x4550 || Reader.ReadUInt16() != 0x14C)
+                throw new InvalidDataException("Unsupported executable: expected a PE32/i386 game image.");
+            ushort Sections = Reader.ReadUInt16();
+            Stream.Position = PE + 20;
+            ushort OptionalSize = Reader.ReadUInt16();
+            Stream.Position = PE + 24;
+            if (Sections == 0 || Sections > 96 || OptionalSize < 96 || Reader.ReadUInt16() != 0x10B
+                || PE + 24L + OptionalSize + Sections * 40L > Stream.Length)
+                throw new InvalidDataException("Unsupported executable: invalid PE32 section table.");
             execID ID = ValidateExecutableID();
             if (ID == execID.NONE)
             {
-                throw new Exception("Invalid executable has been chosen!\nAborting ...");
+                throw new InvalidDataException("Unsupported executable. Expected game/editor version 1.71.4289 (original, History Ubisoft, or unpacked History Steam). No patch was applied.");
             }
 
             if ((ID == execID.OV || ID == execID.HE_STEAM) && !IsSteamExecutableValid(ID))
@@ -38,12 +55,13 @@ namespace S6Patcher.Source.Patcher
         {
             Logger.Instance.Log("Called with Stream: " + Stream.Name);
 
-            int Size = Encoding.Unicode.GetByteCount(ExpectedVersion) + 1;
+            int Size = Encoding.Unicode.GetByteCount(ExpectedVersion);
             byte[] Result = new byte[Size];
+            execID Match = execID.NONE;
 
             foreach (var Element in Mapping)
             {
-                if (Stream.Length < Element.Key)
+                if (Element.Key > Stream.Length - Size)
                 {
                     Logger.Instance.Log(Element.Value.ToString() + " Stream Length smaller than Mapping Index: " + Stream.Length.ToString());
                     continue;
@@ -58,12 +76,13 @@ namespace S6Patcher.Source.Patcher
                 if (Version == ExpectedVersion)
                 {
                     Logger.Instance.Log("Valid executable! execID: " + Element.Value.ToString());
-                    return Element.Value;
+                    if (Match != execID.NONE) throw new InvalidDataException("Ambiguous executable version signatures. No patch was applied.");
+                    Match = Element.Value;
                 };
             }
 
-            Logger.Instance.Log("No valid executable was found!");
-            return execID.NONE;
+            if (Match == execID.NONE) Logger.Instance.Log("No valid executable was found!");
+            return Match;
         }
 
         private bool IsSteamExecutableValid(execID? ID)

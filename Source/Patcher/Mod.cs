@@ -13,13 +13,6 @@ namespace S6Patcher.Source.Patcher
 {
     internal class Mod(execID GlobalID, string GlobalStreamName)
     {
-        private enum FileOperation : byte
-        {
-            Replace = 0x00,
-            Insert = 0x01,
-            Delete = 0x02
-        }
-
         private class ModLoaderFile
         {
             public bool IsDataFile;
@@ -38,11 +31,15 @@ namespace S6Patcher.Source.Patcher
         private readonly string ArchiveFilePathBase = Path.Combine(IOFileHandler.Instance.GetModLoaderDirectory(GlobalID, GlobalStreamName), "base");
         private readonly string ArchiveFilePathExtra1 = Path.Combine(IOFileHandler.Instance.GetModLoaderDirectory(GlobalID, GlobalStreamName), "extra1");
         private const string ArchiveFileName = "mod.bba";
+        private string WorkingBugfixDirectory;
         public event Action<string> ShowMessage;
         private static async Task<List<MemoryStream>> DownloadDefinitionFile(string FilePath) => await WebHandler.Instance.DownloadFilesAsync([new Uri(FilePath)]);
 
         public async Task Create(bool InstallMod, bool DownloadDefinition, bool UseGameplayModification)
         {
+            // Restore the previous mod if the process died after moving it aside.
+            // If both directories exist, stop rather than silently delete evidence.
+            RecoverInterruptedInstall(ArchiveFilePath);
             try
             {
                 await WriteModLoaderFiles();
@@ -51,7 +48,7 @@ namespace S6Patcher.Source.Patcher
             {
                 ErrorTracking.Increment();
                 Logger.Instance.Log(ex.ToString());
-                ShowMessage.Invoke(ex.Message);
+                ShowMessage?.Invoke(ex.Message);
                 return;
             }
 
@@ -72,7 +69,7 @@ namespace S6Patcher.Source.Patcher
                     }
                     catch
                     {
-                        Definition.ForEach(async Element => await Element.DisposeAsync());
+                        Definition.ForEach(Element => Element.Dispose());
                         FileDataParser = null;
 
                         Logger.Instance.Log("Downloaded Definition file invalid, falling back to embedded resource ...");
@@ -81,22 +78,75 @@ namespace S6Patcher.Source.Patcher
             }
 
             FileDataParser ??= new BinaryParser("S6Patcher.Definitions.FileData.bin");
-            GlobalFileDataMappings.AddRange(FileDataParser.ParseFileData());
+            try
+            {
+                GlobalFileDataMappings.AddRange(FileDataParser.ParseFileData());
+                if (UseGameplayModification) GlobalFileDataMappings.AddRange(GameplayModification.ModifiableFileData);
+            }
+            finally { FileDataParser.Dispose(); }
+            
+            foreach (var Entry in GlobalFileDataMappings)
+            {
+                SafePath.InDirectory(GlobalDestinationDirectoryPath, Entry.FilePath);
+                SafePath.InDirectory(GlobalBaseGameDataDirectoryPath, Entry.BBArchiveName);
+            }
+            if (GlobalFileDataMappings.GroupBy(Entry => Utility.SanitizeFilePath(Entry.FilePath), StringComparer.OrdinalIgnoreCase).Any(Group => Group.Count() > 1))
+                throw new InvalidDataException("Conflicting mod definitions target the same file. No bugfix files were installed.");
 
-            if (UseGameplayModification)
+            // Never delete the active bugfix folder before its replacement has been fully generated.
+            WorkingBugfixDirectory = AtomicFile.TemporaryPath(ArchiveFilePath) + ".dir";
+            uint PreviousErrors = ErrorTracking.Count;
+            try
             {
-                GlobalFileDataMappings.AddRange(GameplayModification.ModifiableFileData);
+                Directory.CreateDirectory(WorkingBugfixDirectory);
+                if (GlobalID == execID.OV) await GetModLoaderFilesFromArchives();
+                else await UpdateModLoaderFilesByFileDataMapping();
+                if (ErrorTracking.Count != PreviousErrors)
+                    throw new IOException("Mod generation failed. Previous bugfix files were retained; see S6Patcher.log.");
+
+                InstallStagedDirectory(WorkingBugfixDirectory, ArchiveFilePath);
+
             }
-            
-            FileDataParser.Dispose();
-            
-            if (GlobalID == execID.OV)
+            finally
             {
-                await GetModLoaderFilesFromArchives(); // Updated Files from game archive files 
+                if (Directory.Exists(WorkingBugfixDirectory)) Directory.Delete(WorkingBugfixDirectory, true);
+                WorkingBugfixDirectory = null;
             }
-            else
+        }
+
+        // A deterministic recovery name survives a crash between the two directory renames.
+        // Refuse ambiguous state rather than overwrite a previous installation.
+        internal static void RecoverInterruptedInstall(string active)
+        {
+            string previous = active + ".s6patcher-recovery";
+            if (!Directory.Exists(previous)) return;
+            if (Directory.Exists(active))
+                throw new IOException("A previous mod installation recovery directory remains. Back it up and inspect it before patching again.");
+            Directory.Move(previous, active);
+        }
+
+        internal static void InstallStagedDirectory(string staged, string active, Action afterBackup = null)
+        {
+            string previous = active + ".s6patcher-recovery";
+            if (Directory.Exists(previous))
+                throw new IOException("A pending mod recovery directory exists. Refusing to overwrite it.");
+            bool hadPrevious = Directory.Exists(active);
+            if (hadPrevious) Directory.Move(active, previous);
+            try
             {
-                await UpdateModLoaderFilesByFileDataMapping(); // Updated Files from game directory 
+                afterBackup?.Invoke(); // fault-injection seam, never used in production
+                Directory.Move(staged, active);
+            }
+            catch
+            {
+                if (hadPrevious && !Directory.Exists(active))
+                    Directory.Move(previous, active);
+                throw;
+            }
+            if (hadPrevious)
+            {
+                try { Directory.Delete(previous, true); }
+                catch (Exception ex) { Logger.Instance.Log("Old mod directory retained for inspection: " + ex.GetType().Name); }
             }
         }
 
@@ -106,7 +156,8 @@ namespace S6Patcher.Source.Patcher
 
             if (GlobalID == execID.HE_UBISOFT || GlobalID == execID.HE_STEAM)
             {
-                Directory.CreateDirectory(ArchiveFilePath);
+                // The active shr directory is installed only after successful staging.
+                // Creating it here would leave an empty mod after a failed first install.
                 Directory.CreateDirectory(Path.Combine(ArchiveFilePathBase, "shr"));
                 Directory.CreateDirectory(Path.Combine(ArchiveFilePathExtra1, "shr"));
                 Logger.Instance.Log("Directories created.");
@@ -128,7 +179,7 @@ namespace S6Patcher.Source.Patcher
             string CurrentPath = Path.Combine(BasePath, ArchiveFileName);
             if (!File.Exists(CurrentPath))
             {
-                await File.WriteAllBytesAsync(CurrentPath, Resources.mod);
+                await AtomicFile.WriteAllBytesAsync(CurrentPath, Resources.mod);
                 Logger.Instance.Log("Written " + ArchiveFileName + " to " + CurrentPath);
             }
             else
@@ -142,55 +193,23 @@ namespace S6Patcher.Source.Patcher
             var ArchiveFilesToParse = GetArchiveFilesToParse();
             await LoadDataFromArchiveFiles(ArchiveFilesToParse);
             await WriteAllModFilesToCorrespondingFolder(ArchiveFilesToParse);
-            await CreateArchiveFileInPath(ArchiveFilePathModloader);
+            await CreateArchiveFileInPath(WorkingBugfixDirectory);
         }
 
         private static byte[] UpdateFileContent(FileDataEntry Entry, byte[] FileContent)
         {
-            List<byte> FileContentAsList = [.. FileContent];
-            if (FileContentAsList.Count == 0)
-            {
-                return null;
-            }
-
-            foreach (var DataEntry in Entry.Data.OrderByDescending(E => E.Key))
-            {
-                FileOperation Operation = (FileOperation)DataEntry.Value[0];
-                switch (Operation)
-                {
-                    case FileOperation.Replace:
-                    {
-                        var Data = DataEntry.Value.Skip(1);
-                        Utility.ReplaceRange(FileContentAsList, (int)DataEntry.Key, DataEntry.Value.Length - 1, Data);
-                        break;
-                    }
-                    case FileOperation.Insert:
-                    {
-                        var Data = DataEntry.Value.Skip(1);
-                        FileContentAsList.InsertRange((int)DataEntry.Key, Data);
-                        break;
-                    }
-                    case FileOperation.Delete:
-                    {
-                        int Length = (int)BitConverter.ToUInt32(DataEntry.Value, 1);
-                        FileContentAsList.RemoveRange((int)DataEntry.Key, Length);
-                        break;
-                    }
-                }
-            }
-            
-            return [.. FileContentAsList];
+            return FileDataPatches.Apply(Entry, FileContent);
         }
 
         private FileStream OpenArchiveFileStream(string ArchiveFile, out bool IsExtra1ArchiveFile)
         {
             IsExtra1ArchiveFile = false;
 
-            string ArchiveFilePath = Path.Combine(GlobalBaseGameDataDirectoryPath, ArchiveFile);
+            string ArchiveFilePath = SafePath.InDirectory(GlobalBaseGameDataDirectoryPath, ArchiveFile);
             if (!File.Exists(ArchiveFilePath))
             {
                 // Check if is extra1
-                ArchiveFilePath = Path.Combine(GlobalExtra1GameDataDirectoryPath, ArchiveFile);
+                ArchiveFilePath = SafePath.InDirectory(GlobalExtra1GameDataDirectoryPath, ArchiveFile);
 
                 if (!File.Exists(ArchiveFilePath))
                 {
@@ -223,6 +242,7 @@ namespace S6Patcher.Source.Patcher
                 BBAArchiveFile ArchiveFile;
                 try
                 {
+                    ArchiveGuard.ReadEntries(ArchiveFileStream, WorkingBugfixDirectory);
                     ArchiveFile = new(ArchiveFileStream, true);
                 }
                 catch
@@ -233,17 +253,19 @@ namespace S6Patcher.Source.Patcher
                     continue;
                 }
                 
-                foreach (ModLoaderFile MLF in Element.Value)
+                try
                 {
-                    MLF.Data = ArchiveFile.GetFileDataByDataEntryName(MLF.Name);
-                    if (MLF.Data == null)
+                    foreach (ModLoaderFile MLF in Element.Value)
                     {
-                        ErrorTracking.Increment();
-                        Logger.Instance.Log($"Could NOT parse data from archive file {Element.Key}.");
+                        MLF.Data = ArchiveFile.GetFileDataByDataEntryName(MLF.Name);
+                        if (MLF.Data == null)
+                        {
+                            ErrorTracking.Increment();
+                            Logger.Instance.Log($"Could NOT parse data from archive file {Element.Key}.");
+                        }
                     }
                 }
-
-                IOFileHandler.Instance.CloseStream(ArchiveFileStream);
+                finally { IOFileHandler.Instance.CloseStream(ArchiveFileStream); }
             }
         }
 
@@ -279,8 +301,7 @@ namespace S6Patcher.Source.Patcher
         {
             try
             {
-                Directory.Delete(ArchiveFilePathModloader, true); // Clear everything before writing a new directory
-                Directory.CreateDirectory(ArchiveFilePathModloader);
+                Directory.CreateDirectory(WorkingBugfixDirectory);
             }
             catch (Exception ex)
             {
@@ -317,69 +338,22 @@ namespace S6Patcher.Source.Patcher
 
         private async Task CreateArchiveFileInPath(string RootDirectoryFilePath)
         {
-            // Create archive file from previously extracted files
-            // TODO: Maybe do all of this in memory instead of writing the files to the disk inbetween?
-            string TemporaryFile = Path.Combine(GlobalDestinationDirectoryPath, ArchiveFileName);
-            FileStream WrittenArchive;
+            string TemporaryFile = AtomicFile.TemporaryPath(Path.Combine(GlobalDestinationDirectoryPath, ArchiveFileName));
             try
             {
-                WrittenArchive = File.Create(TemporaryFile);
-            }
-            catch (Exception ex)
-            {
-                ErrorTracking.Increment();
-                Logger.Instance.Log(ex.ToString());
-                return;
-            }
-
-            string FilePath = Path.Combine(RootDirectoryFilePath, ArchiveFileName);
-            if (File.Exists(FilePath))
-            {
-                try
+                await using (FileStream WrittenArchive = new(TemporaryFile, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
                 {
-                    File.Delete(FilePath);
+                    new BBAArchiveFile(WrittenArchive, RootDirectoryFilePath, ".bba");
+                    WrittenArchive.Flush(true);
+                    ArchiveGuard.ReadEntries(WrittenArchive, RootDirectoryFilePath);
                 }
-                catch (Exception ex)
-                {
-                    ErrorTracking.Increment();
-                    Logger.Instance.Log(ex.ToString());
-                    return;
-                }
-            }
-
-            try
-            {
-                new BBAArchiveFile(WrittenArchive, RootDirectoryFilePath, ".bba");
-            }
-            catch (Exception ex)
-            {
-                ErrorTracking.Increment();
-                Logger.Instance.Log(ex.ToString());
-
-                await WriteModLoaderArchiveFileAsync(ArchiveFilePathModloader);
-                return;
-            }
-            finally
-            {
-                await WrittenArchive.DisposeAsync();
-            }
-            
-            try
-            {
-                Directory.Delete(RootDirectoryFilePath, true); // Clear all files
+                // RootDirectoryFilePath is the isolated staging folder, never the active mod directory.
+                Directory.Delete(RootDirectoryFilePath, true);
                 Directory.CreateDirectory(RootDirectoryFilePath);
-                File.Move(TemporaryFile, Path.Combine(RootDirectoryFilePath, ArchiveFileName), true);
+                File.Move(TemporaryFile, Path.Combine(RootDirectoryFilePath, ArchiveFileName));
+                Logger.Instance.Log("Generated staged bugfix archive: " + RootDirectoryFilePath);
             }
-            catch (Exception ex)
-            {
-                ErrorTracking.Increment();
-                Logger.Instance.Log(ex.ToString());
-
-                await WriteModLoaderArchiveFileAsync(ArchiveFilePathModloader);
-                return;
-            }
-
-            Logger.Instance.Log($"Finished creating archive file {FilePath}!");
+            finally { File.Delete(TemporaryFile); }
         }
 
         private async Task UpdateModLoaderFilesByFileDataMapping()
@@ -387,11 +361,11 @@ namespace S6Patcher.Source.Patcher
             await Parallel.ForEachAsync(GlobalFileDataMappings, async (Entry, CT) =>
             {
                 string SanitizedFilePath = Utility.SanitizeFilePath(Entry.FilePath);
-                string CurrentFile = Utility.ResolveCaseInsensitivePath(Path.Combine(GlobalExtra1GameDataDirectoryPath, SanitizedFilePath));
+                string CurrentFile = Utility.ResolveCaseInsensitivePath(SafePath.InDirectory(GlobalExtra1GameDataDirectoryPath, SanitizedFilePath));
 
                 if (!File.Exists(CurrentFile))
                 {
-                    CurrentFile = Utility.ResolveCaseInsensitivePath(Path.Combine(GlobalBaseGameDataDirectoryPath, SanitizedFilePath));
+                    CurrentFile = Utility.ResolveCaseInsensitivePath(SafePath.InDirectory(GlobalBaseGameDataDirectoryPath, SanitizedFilePath));
                     if (!File.Exists(CurrentFile))
                     {
                         ErrorTracking.Increment();
@@ -453,14 +427,14 @@ namespace S6Patcher.Source.Patcher
                 return false;
             }
 
-            string DestinationPath = UseModLoaderPath ? ArchiveFilePathModloader : ArchiveFilePath;
-            string DirectoryPath = Path.Combine(DestinationPath, Path.GetDirectoryName(SanitizedFilePath) ?? string.Empty);
-            string Destination = Path.Combine(DestinationPath, SanitizedFilePath);
+            string DestinationPath = WorkingBugfixDirectory ?? (UseModLoaderPath ? ArchiveFilePathModloader : ArchiveFilePath);
+            string Destination = SafePath.InDirectory(DestinationPath, SanitizedFilePath);
+            string DirectoryPath = Path.GetDirectoryName(Destination);
 
             try
             {
                 Directory.CreateDirectory(DirectoryPath);
-                await File.WriteAllBytesAsync(Destination, FileContent, CT);
+                await AtomicFile.WriteAllBytesAsync(Destination, FileContent, CT);
             }
             catch (Exception ex)
             { 

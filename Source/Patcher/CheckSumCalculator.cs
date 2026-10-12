@@ -10,7 +10,7 @@ namespace S6Patcher.Source.Patcher
     internal class CheckSumCalculator
     {
         [DllImport("imagehlp.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
-        private static extern int CheckSumMappedFile(SafeMemoryMappedViewHandle BaseAddress, uint FileLength,
+        private static extern IntPtr CheckSumMappedFile(SafeMemoryMappedViewHandle BaseAddress, uint FileLength,
             ref uint HeaderSum, ref uint CheckSum);
 
         private uint UpdatePEHeaderFileCheckSum(string Path, long Size)
@@ -24,15 +24,15 @@ namespace S6Patcher.Source.Patcher
             using MemoryMappedFile Mapping = MemoryMappedFile.CreateFromFile(Path);
             using MemoryMappedViewAccessor View = Mapping.CreateViewAccessor();
 
-            int Result = CheckSumMappedFile(View.SafeMemoryMappedViewHandle, (uint)Size, ref HeaderSum, ref CheckSum);
-            if (Result == 0x0)
+            IntPtr Result = CheckSumMappedFile(View.SafeMemoryMappedViewHandle, checked((uint)Size), ref HeaderSum, ref CheckSum);
+            if (Result == IntPtr.Zero)
             {
                 ErrorTracking.Increment();
                 Logger.Instance.Log("CheckSumMappedFile failed with code 0 and error: " + CheckSum.ToString());
                 return 0;
             }
 
-            Logger.Instance.Log("New CheckSum: 0x" + $"{CheckSum.ToString():X}");
+            Logger.Instance.Log($"New CheckSum: 0x{CheckSum:X}");
             return CheckSum;
         }
 
@@ -47,11 +47,16 @@ namespace S6Patcher.Source.Patcher
             FileStream Stream = IOFileHandler.Instance.OpenFileStream(Path);
             if (Stream == null)
             {
+                ErrorTracking.Increment();
                 return;
             }
 
-            Utility.WriteValueAtPEHeaderPosition(Stream, 0x54, BitConverter.GetBytes(CheckSum));
-            IOFileHandler.Instance.CloseStream(Stream);
+            try
+            {
+                Utility.WriteValueAtPEHeaderPosition(Stream, 0x54, BitConverter.GetBytes(CheckSum));
+                Stream.Flush(true);
+            }
+            finally { IOFileHandler.Instance.CloseStream(Stream); }
         }
     }
 }

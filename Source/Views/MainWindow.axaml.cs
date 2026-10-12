@@ -63,12 +63,12 @@ namespace S6Patcher.Source.Views
 
         private async Task ShouldUseRegistryPath(string RegistryPath)
         {
-            Logger.Instance.Log("Found registry path: " + RegistryPath);
+            Logger.Instance.Log("Installation path found in registry.");
 
             RegistryPath = Path.Combine(RegistryPath, "base", "bin", "Settlers6.exe");
             if (!File.Exists(RegistryPath))
             {
-                Logger.Instance.Log("Registry path is invalid: " + RegistryPath);
+                Logger.Instance.Log("Registry installation path does not contain a supported executable.");
                 return;
             }
 
@@ -177,6 +177,8 @@ namespace S6Patcher.Source.Views
         {
             try
             {
+                if (PatchSessionRecovery.Recover(Filepath))
+                    Logger.Instance.Log("Recovered interrupted patch session before opening executable.");
                 MainPatcher = new Patcher.Patcher(Filepath);
             }
             catch (Exception ex)
@@ -187,7 +189,6 @@ namespace S6Patcher.Source.Views
             }
 
             txtPath.Text = Filepath;
-            MainPatcher.ShowMessage += async Message => await ShowMessageBox("Error", Message);
             MainPatcher.GlobalMod.ShowMessage += async Message => await ShowMessageBox("ModLoader", Message);
             
             EnableUIElements(MainPatcher.GlobalID);
@@ -195,7 +196,7 @@ namespace S6Patcher.Source.Views
 
         private async Task FinishPatching()
         {
-            ResetPatcher(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
+            ResetPatcher();
             UncheckFeatureBoxes();
 
             string Message = "Patching finished!" + (ErrorTracking.Count > 0 ? 
@@ -207,20 +208,87 @@ namespace S6Patcher.Source.Views
 
         private async void MainPatchingTask()
         {
+            if (PatchingInProgress || MainPatcher == null) return;
             PatchingInProgress = true;
             ErrorTracking.Reset();
             Logger.Instance.Log("Patching Process Started!");
 
-            DisableUI(false);
-            btnChoose.IsEnabled = false;
+            string PreviousDocuments = UserScriptHandler.Instance.GlobalDocuments;
+            bool Completed = false;
+            PatchSessionRecovery Session = null;
+            try
+            {
+                DisableUI(false);
+                btnChoose.IsEnabled = false;
+                btnExit.IsEnabled = false;
 
-            await ViewHelpers.GetPathToOptionsFile();
-            await PatchByFeatures();
-            await FinishPatching();
-
-            btnChoose.IsEnabled = true;
-            Logger.Instance.Log($"Patching Process Finished! Amount of Errors: {ErrorTracking.Count}");
-            PatchingInProgress = false;
+                // Route scripts and settings to the same root that the DCP executable patch will select.
+                if (cbFolderPath.IsChecked == true && MainPatcher.GlobalID != execID.ED)
+                    UserScriptHandler.Instance.UseDocumentsRoot(txtFolderPath.Text);
+                await ViewHelpers.GetPathToOptionsFile();
+                if (MainPatcher.GlobalID != execID.ED && !UserScriptHandler.Instance.DoesUserScriptDirectoryExist())
+                    throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
+                if (MainPatcher.GlobalID == execID.HE_STEAM)
+                {
+                    string executable = MainPatcher.ExecutablePath;
+                    var profileDirs = UserScriptHandler.Instance.GetUserScriptDirectories();
+                    string[] scriptNames = ["UserScriptLocal.lua", "UserScriptGlobal.lua", "EMXBinData.s6patcher"];
+                    var files = new List<string> { executable };
+                    foreach (string profile in profileDirs)
+                    {
+                        files.Add(Path.Combine(profile, "Config", "Options.ini"));
+                        foreach (string script in scriptNames) files.Add(Path.Combine(profile, "Script", script));
+                    }
+                    string modDirectory = Path.Combine(IOFileHandler.Instance.GetModLoaderDirectory(MainPatcher.GlobalID, executable), "shr");
+                    Session = PatchSessionRecovery.Begin(executable, files, [modDirectory], MainPatcher.SnapshotOriginalExecutable);
+                }
+                await PatchByFeatures();
+                MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
+                Session?.Commit();
+                Completed = true;
+                await FinishPatching();
+            }
+            catch (Exception ex)
+            {
+                ErrorTracking.Increment();
+                Logger.Instance.Log(ex.ToString());
+                string recoveryError = "";
+                if (Session != null && !Completed)
+                {
+                    try
+                    {
+                        // On Windows, the opened executable cannot be restored while locked.
+                        ResetPatcher();
+                        Session.Dispose();
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        recoveryError = "\\nAutomatic rollback failed. Do not start the game until the pending recovery journal is inspected. " + rollbackError.GetType().Name;
+                        Logger.Instance.Log("Patch session rollback failed: " + rollbackError);
+                    }
+                }
+                string Result = Completed
+                    ? "\nThe executable was committed, but finishing the interface failed. Check S6Patcher.log before retrying."
+                    : "\nThe executable was not committed. Auxiliary files may have been updated; see S6Patcher.log.";
+                await ShowMessageBox(Completed ? "Patching completed with an interface error" : "Patching failed", ex.Message + Result + recoveryError);
+            }
+            finally
+            {
+                if (!Completed) UserScriptHandler.Instance.GlobalDocuments = PreviousDocuments;
+                try { ResetPatcher(); }
+                catch (Exception ex)
+                {
+                    ErrorTracking.Increment();
+                    Logger.Instance.Log("Patcher cleanup failed: " + ex);
+                }
+                finally
+                {
+                    btnChoose.IsEnabled = true;
+                    btnExit.IsEnabled = true;
+                    PatchingInProgress = false;
+                }
+                Logger.Instance.Log($"Patching process ended: executable committed={Completed}; reported errors={ErrorTracking.Count}.");
+            }
         }
 
         private List<string> GetFeatures()
@@ -246,12 +314,12 @@ namespace S6Patcher.Source.Views
             bool DoNotUseEmbedded = rbDownload.IsChecked == true;
             bool UseGameplayModification = cbModding.IsChecked == true;
 
-            Task Completed = Task.WhenAll(PatcherScriptFilesWrapper(DoNotUseEmbedded), 
-                PatcherModLoaderWrapper(UseBugfixMod, UseModLoader, DoNotUseEmbedded, UseGameplayModification));
+            // Keep mutations ordered and await each operation before another can fail or close the patcher.
+            await PatcherScriptFilesWrapper(DoNotUseEmbedded);
+            await PatcherModLoaderWrapper(UseBugfixMod, UseModLoader, DoNotUseEmbedded, UseGameplayModification);
 
             if (cbUpdater.IsChecked == true)
             {
-                await Completed;
                 return;
             }
 
@@ -281,7 +349,6 @@ namespace S6Patcher.Source.Views
                 MainPatcher.SetDocumentsFolderPath(txtFolderPath.Text);
             }
 
-            await Completed;
         }
 
         private async Task PatcherModLoaderWrapper(bool ModInstallation, bool UseModLoader, bool DoNotUseEmbedded, bool UseGamelayModification)
@@ -300,23 +367,11 @@ namespace S6Patcher.Source.Views
             }
         }
 
-        private async void GetUserExitOption()
-        {
-            ButtonResult Result = await ViewHelpers.ShowPromptMessageBox("Exit", 
-                "Patching is currently in progress! Are you sure you want to exit?");
-
-            if (Result == ButtonResult.Yes)
-            {
-                PatchingInProgress = false;
-                Close();
-            }
-        }
-
         protected override void OnClosing(WindowClosingEventArgs e)
         {
             if (PatchingInProgress)
             {
-                GetUserExitOption();
+                // Closing streams while awaited work continues could invalidate the staged operation.
                 e.Cancel = true;
                 return;
             }
@@ -335,7 +390,7 @@ namespace S6Patcher.Source.Views
 
         private async void RestoreBackup()
         {
-            execID GlobalID = (execID)(MainPatcher?.GlobalID);
+            execID GlobalID = MainPatcher?.GlobalID ?? execID.NONE;
             string BackupPath = txtPath.Text;
             
             ResetPatcher();
@@ -346,10 +401,11 @@ namespace S6Patcher.Source.Views
         private async Task<bool> ShowPromptMessageBoxWrapper(string Title, string Message) => await ViewHelpers.ShowPromptMessageBox(Title, Message) == ButtonResult.Yes;
         private async Task ShowMessageBox(string Title, string Message) => await ViewHelpers.ShowMessageBox(Title, Message);
 
-        private void ResetPatcher(bool FinishWithPEHeader = false)
+        private void ResetPatcher()
         {
-            MainPatcher?.Dispose(FinishWithPEHeader);
+            var Previous = MainPatcher;
             MainPatcher = null;
+            Previous?.Dispose();
         }
 
         private void btnArchiveUnpack_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e) => UnpackArchiveFileWrapper();
@@ -425,10 +481,10 @@ namespace S6Patcher.Source.Views
                 return;
             }
 
-            string ArchiveFileName = Path.GetDirectoryName(FolderPath) + FileExtension;
+            string ArchiveFileName = FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + FileExtension;
             bool Result = await Archives.PackFolderFilesIntoArchiveFileAsync(FolderPath, ArchiveFileName);
 
-            Message = $"Packed folder {Path.GetDirectoryName(FolderPath)} into archive file {Path.GetFileName(ArchiveFileName)}.";
+            Message = Result ? $"Archive created: {Path.GetFileName(ArchiveFileName)}." : "Archive creation did not complete successfully.";
             Message += "\n\n" + (Result ? "No errors occured!" : "An error occured!");
             await ShowMessageBox("Packing Archive File ...", Message);
         }

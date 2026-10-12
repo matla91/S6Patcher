@@ -105,6 +105,7 @@ namespace S6Patcher.Source.Utilities
                return InputPath; 
             }
 
+            InputPath = Path.GetFullPath(InputPath);
             string RootPath = Path.GetPathRoot(InputPath);
             string CurrentPath = RootPath;
 
@@ -112,6 +113,7 @@ namespace S6Patcher.Source.Utilities
                     .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                     .Where(P => !string.IsNullOrEmpty(P)))
             {
+                if (!Directory.Exists(CurrentPath)) return InputPath;
                 var Match = Directory.EnumerateFileSystemEntries(CurrentPath)
                     .FirstOrDefault(X => string.Equals(Path.GetFileName(X), Part, StringComparison.OrdinalIgnoreCase));
 

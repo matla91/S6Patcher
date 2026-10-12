@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Threading.Tasks;
+using S6Patcher.Source.Patcher;
 
 namespace S6Patcher.Source.Utilities
 {
@@ -16,7 +17,13 @@ namespace S6Patcher.Source.Utilities
             {
                 try
                 {
-                    File.Copy(Path, Backup, false);
+                    string Temporary = AtomicFile.TemporaryPath(Backup);
+                    try
+                    {
+                        File.Copy(Path, Temporary, false);
+                        File.Move(Temporary, Backup, false);
+                    }
+                    finally { File.Delete(Temporary); }
                 }
                 catch (Exception ex)
                 {
@@ -40,19 +47,32 @@ namespace S6Patcher.Source.Utilities
                 if (!File.Exists(Backup))
                 {
                     Logger.Instance.Log("NEW File " + Backup + " NOT found! Aborting ...");
-                    ShowMessage.Invoke("Could not restore Backup. No file found!");
+                    ShowMessage?.Invoke("Could not restore Backup. No file found!");
                     return;
                 }
             }
 
             try
             {
-                File.Replace(Backup, Path, null);
+                using (FileStream Stream = new(Backup, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    execID BackupID = new Validator(Stream).Validate();
+                    if (GlobalID == execID.NONE || BackupID != GlobalID)
+                        throw new InvalidDataException("Backup does not match the selected game edition. Restore aborted.");
+                }
+                // Restore a copy so the original backup remains available for another recovery.
+                string Temporary = AtomicFile.TemporaryPath(Path);
+                try
+                {
+                    File.Copy(Backup, Temporary, false);
+                    File.Replace(Temporary, Path, null);
+                }
+                finally { File.Delete(Temporary); }
             }
             catch (Exception ex)
             {
                 Logger.Instance.Log(ex.ToString());
-                ShowMessage.Invoke(ex.Message);
+                ShowMessage?.Invoke(ex.Message);
                 return;
             }
 
@@ -69,17 +89,17 @@ namespace S6Patcher.Source.Utilities
                     catch (Exception ex)
                     {
                         Logger.Instance.Log(ex.ToString());
-                        ShowMessage.Invoke("Could not delete Mod folder: " + ex.Message);
+                        ShowMessage?.Invoke("Could not delete Mod folder: " + ex.Message);
                     }
                 }
             }
 
             Logger.Instance.Log("File " + Path + " successfully restored!");
-            ShowMessage.Invoke("Backup successfully restored!");
+            ShowMessage?.Invoke("Backup successfully restored!");
         }
 
-        private static async Task<bool> AskForModDeletion() => await ShowMessagePrompt.Invoke("Keep Mod files in separate folder? (Recommended)");
-        private static string GetBackupPath(string Filepath, bool Old) =>
+        private static async Task<bool> AskForModDeletion() => ShowMessagePrompt == null || await ShowMessagePrompt.Invoke("Keep Mod files in separate folder? (Recommended)");
+        internal static string GetBackupPath(string Filepath, bool Old) =>
             Path.Combine(Path.GetDirectoryName(Filepath), 
                 Path.GetFileNameWithoutExtension(Filepath) + (Old ? "_BACKUP.exe" : ".backup"));
     }

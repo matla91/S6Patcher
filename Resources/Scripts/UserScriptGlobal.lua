@@ -153,25 +153,60 @@ end)();
 -- ************************************************************************************************************************************************************* --
 -- Fix Bandit Fireplace crashing the game																										  				 --
 -- ************************************************************************************************************************************************************* --
+-- Each invocation owns its snapshot: nested fireplace callbacks must restore
+-- their caller's creator, not overwrite a shared global backup.
+local function CallBanditFireplace(_callback, _campID)
+	local EngineLogic = Logic;
+	local OriginalCreateEntity = EngineLogic.CreateEntity;
+	local OriginalTraceback;
+	local Success, Result = xpcall(function()
+		EngineLogic.CreateEntity = EngineLogic.CreateEntityOnUnblockedLand;
+		assert(EngineLogic.CreateEntity == EngineLogic.CreateEntityOnUnblockedLand, "CreateEntity hook installation failed");
+		return _callback(_campID);
+	end, function(_error)
+		-- debug is optional in the game; a failed diagnostic must not replace _error.
+		local Captured, Traceback = pcall(function()
+			if type(debug) == "table" and type(debug.traceback) == "function" then
+				return debug.traceback("", 2);
+			end
+		end);
+		if Captured then OriginalTraceback = Traceback; end
+		return _error;
+	end);
+	local Restored, RestoreError = pcall(function()
+		EngineLogic.CreateEntity = OriginalCreateEntity;
+		assert(EngineLogic.CreateEntity == OriginalCreateEntity, "CreateEntity restoration failed");
+	end);
+	if not Success then
+		-- Report secondary restoration faults without masking the primary error.
+		-- Restoration is attempted before logging the captured diagnostic.
+		pcall(function()
+			local Printed, ErrorText = pcall(tostring, Result);
+			local Diagnostic = "S6Patcher: bandit fireplace hook failed: " .. (Printed and ErrorText or "<unprintable error>");
+			if OriginalTraceback then Diagnostic = Diagnostic .. "\n" .. OriginalTraceback; end
+			if not Restored then
+				local RestorePrinted, RestoreText = pcall(tostring, RestoreError);
+				Diagnostic = Diagnostic .. "\nCreateEntity restoration failed: " .. (RestorePrinted and RestoreText or "<unprintable error>");
+			end
+			Framework.WriteToLog(Diagnostic);
+		end);
+		error(Result, 0);
+	end
+	if not Restored then error(RestoreError, 0); end
+	-- Keep the original wrappers' single return value, including nil and false.
+	return Result;
+end
 if S6Patcher.ActivateFireplaceforBanditPack == nil then
 	S6Patcher.ActivateFireplaceforBanditPack = ActivateFireplaceforBanditPack;
 end
 ActivateFireplaceforBanditPack = function(_CampID)
-	S6Patcher.CreateEntityOverride = Logic.CreateEntity;
-	Logic.CreateEntity = Logic.CreateEntityOnUnblockedLand;
-	local Result = S6Patcher.ActivateFireplaceforBanditPack(_CampID);
-	Logic.CreateEntity = S6Patcher.CreateEntityOverride;
-	return Result;
+	return CallBanditFireplace(S6Patcher.ActivateFireplaceforBanditPack, _CampID);
 end
 if S6Patcher.DisableFireplaceforBanditPack == nil then
 	S6Patcher.DisableFireplaceforBanditPack = DisableFireplaceforBanditPack;
 end
 DisableFireplaceforBanditPack = function(_CampID)
-	S6Patcher.CreateEntityOverride = Logic.CreateEntity;
-	Logic.CreateEntity = Logic.CreateEntityOnUnblockedLand;
-	local Result = S6Patcher.DisableFireplaceforBanditPack(_CampID);
-	Logic.CreateEntity = S6Patcher.CreateEntityOverride;
-	return Result;
+	return CallBanditFireplace(S6Patcher.DisableFireplaceforBanditPack, _CampID);
 end
 -- ************************************************************************************************************************************************************* --
 -- Special Knight Abilities																										 								 --

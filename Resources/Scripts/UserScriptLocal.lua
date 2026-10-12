@@ -595,11 +595,8 @@ end
 
 S6Patcher.GetLocalizedText = function(_text)
 	local Language = Network.GetDesiredLanguage();
-	if S6Patcher.TranslatedStrings[Language] ~= nil then
-		return S6Patcher.TranslatedStrings[Language][_text];
-	else
-		return S6Patcher.TranslatedStrings["en"][_text];
-	end
+	local Translation = S6Patcher.TranslatedStrings[Language] or {};
+	return Translation[_text] or S6Patcher.TranslatedStrings["en"][_text] or _text;
 end
 
 S6Patcher.TranslatedStrings = {};
@@ -676,8 +673,14 @@ end
 -- ************************************************************************************************************************************************************* --
 -- FPS Mode																																	 					 --
 -- ************************************************************************************************************************************************************* --
+-- A load/restart can execute this script again in the same local Lua state.
+if S6Patcher.FPSMode and (S6Patcher.FPSMode.Enabled or S6Patcher.FPSMode.CleanupPending) then
+	-- Keep the old recovery state and callbacks if an engine step failed; Z/Escape can retry.
+	if not S6Patcher.FPSMode.Disable() then return; end
+end
 S6Patcher.FPSMode = {
 	Enabled = false,
+	CleanupPending = false,
 	IsMoving = false,
 
 	CurrentPosX = 0,
@@ -728,11 +731,11 @@ S6Patcher.FPSMode.SetKeyBindings = function(_reset)
 	Key = Keys[S6Patcher.FPSMode.KeyMapping.Forward];
 	FuncCall = (_reset and "KeyBindings_MenuWeather()") or "S6Patcher.FPSMode.ToggleMovement(true, S6Patcher.FPSMode.Directions.Forward)";
 	Input.KeyBindDown(Key, FuncCall, 2);
-	Input.KeyBindUp(Key, "S6Patcher.FPSMode.ToggleMovement(false, S6Patcher.FPSMode.Directions.Forward)", 2); -- Returns anyway
+	Input.KeyBindUp(Key, _reset and "" or "S6Patcher.FPSMode.ToggleMovement(false, S6Patcher.FPSMode.Directions.Forward)", 2);
 
 	Key = Keys[S6Patcher.FPSMode.KeyMapping.Backward];
-	Input.KeyBindDown(Key, "S6Patcher.FPSMode.ToggleMovement(true, S6Patcher.FPSMode.Directions.Backward)", 2);
-	Input.KeyBindUp(Key, "S6Patcher.FPSMode.ToggleMovement(false, S6Patcher.FPSMode.Directions.Backward)", 2);
+	Input.KeyBindDown(Key, _reset and "KeyBindings_BuildingStartStop()" or "S6Patcher.FPSMode.ToggleMovement(true, S6Patcher.FPSMode.Directions.Backward)", 2);
+	Input.KeyBindUp(Key, _reset and "" or "S6Patcher.FPSMode.ToggleMovement(false, S6Patcher.FPSMode.Directions.Backward)", 2);
 
 	Key = Keys[S6Patcher.FPSMode.KeyMapping.IncreaseFOV];
 	FuncCall = (_reset and "KeyBindings_BuildingUpgrade()") or "S6Patcher.FPSMode.ModifyFieldOfView(false)";
@@ -758,8 +761,12 @@ S6Patcher.FPSMode.ToggleMovement = function(_moving, _direction)
 		return;
 	end
 
-	FPS.IsMoving = _moving;
-	FPS.CurrentDirection = _direction;
+	if _direction == FPS.Directions.Forward then FPS.ForwardHeld = _moving;
+	else FPS.BackwardHeld = _moving; end
+	FPS.IsMoving = FPS.ForwardHeld or FPS.BackwardHeld or false;
+	if _moving then FPS.CurrentDirection = _direction;
+	elseif FPS.ForwardHeld then FPS.CurrentDirection = FPS.Directions.Forward;
+	elseif FPS.BackwardHeld then FPS.CurrentDirection = FPS.Directions.Backward; end
 end
 
 S6Patcher.FPSMode.OverrideGameFuncs = function()
@@ -768,9 +775,23 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 	end
 	ThroneRoomCameraControl = function()
 		local FPS = S6Patcher.FPSMode;
+		if FPS.Enabled and (S6Patcher.DisableFeatures or g_Throneroom ~= nil or Framework.IsNetworkGame() or CameraAnimation.IsRunning()) then
+			FPS.Disable();
+		end
 
 		if not FPS.Enabled then
-			S6Patcher.ThroneRoomCameraControl();
+			return S6Patcher.ThroneRoomCameraControl();
+		end
+
+		local Success, Message = pcall(FPS.UpdateCamera);
+		if not Success then
+			Framework.WriteToLog("S6Patcher FPS update failed: " .. tostring(Message));
+			FPS.Disable();
+		end
+	end
+	S6Patcher.FPSMode.UpdateCamera = function()
+		local FPS = S6Patcher.FPSMode;
+		if not FPS.Enabled then
 			return;
 		end
 
@@ -812,7 +833,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		local LastFrameTime = FPS.LastFrameTime;
 		local DeltaTime = 0;
 		if LastFrameTime ~= 0 then
-			DeltaTime = (Time - LastFrameTime) / 1000.0;
+			DeltaTime = math.max(0, math.min(0.1, (Time - LastFrameTime) / 1000.0));
 		end
 		FPS.LastFrameTime = Time;
 
@@ -859,7 +880,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		S6Patcher.GameCallback_GUI_SelectionChanged_FPSMode = GameCallback_GUI_SelectionChanged;
 	end
 	GameCallback_GUI_SelectionChanged = function(_Source)
-		if S6Patcher.FPSMode.Enabled then
+		if S6Patcher.FPSMode.Enabled and GUI.GetSelectedEntity() ~= 0 then
 			GUI.ClearSelection();
 		end
 
@@ -881,30 +902,40 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		S6Patcher.GameCallback_Escape = GameCallback_Escape;
 	end
 	GameCallback_Escape = function()
-		if S6Patcher.FPSMode.Enabled then
-			S6Patcher.FPSMode.Toggle();
+		if S6Patcher.FPSMode.Enabled or S6Patcher.FPSMode.CleanupPending then
+			S6Patcher.FPSMode.Disable();
+			return;
 		end
 
 		S6Patcher.GameCallback_Escape();
 	end
 	
-	OnBackButtonPressed = function() end
-	OnSkipButtonPressed = function() end
-	ThroneRoomLeftClick = function() end
+	for _, Name in ipairs({"OnBackButtonPressed", "OnSkipButtonPressed", "ThroneRoomLeftClick"}) do
+		local Original = _G[Name];
+		if S6Patcher[Name .. "_FPSOriginal"] == nil then
+			S6Patcher[Name .. "_FPSOriginal"] = Original;
+		end
+		local Saved = S6Patcher[Name .. "_FPSOriginal"];
+		_G[Name] = function(...)
+			if not S6Patcher.FPSMode.Enabled and Saved then
+				return Saved(...);
+			end
+		end
+	end
 end
 
 S6Patcher.FPSMode.Toggle = function()
-	if S6Patcher.DisableFeatures or g_Throneroom ~= nil or Framework.IsNetworkGame() or CameraAnimation.IsRunning() then
+	local FPS = S6Patcher.FPSMode;
+	-- Restrictions may forbid entry, but must never prevent recovery.
+	if FPS.Enabled or FPS.CleanupPending then
+		FPS.Disable();
 		return;
 	end
-
-	if S6Patcher.FPSMode.Enabled then
-		S6Patcher.FPSMode.Disable();
-	else
-		S6Patcher.FPSMode.Enable();
+	if S6Patcher.DisableFeatures or Options.GetIntValue("S6Patcher", "FirstPersonCamera", 1) == 0
+		or g_Throneroom ~= nil or Framework.IsNetworkGame() or CameraAnimation.IsRunning() then
+		return;
 	end
-
-	S6Patcher.FPSMode.Enabled = not S6Patcher.FPSMode.Enabled;
+	FPS.Enable();
 end
 
 S6Patcher.FPSMode.ModifyFieldOfView = function(_decrease)
@@ -940,26 +971,81 @@ S6Patcher.FPSMode.ModifyViewDistance = function(_decrease)
 end
 
 S6Patcher.FPSMode.Disable = function()
-	Display.SetRenderSky(0);
-	Display.SetRenderFogOfWar(1);
-	Display.SetRenderBorderPins(1);
-	Display.SetUserOptionOcclusionEffect(1);
-	Display.UseStandardSettings();
-
-	GUI.EnableBattleSignals(true);
-    GUI.SetFeedbackSoundOutputState(1);
-    GUI.PermitContextSensitiveCommandsInSelectionState();
-
-	S6Patcher.FPSMode.ToggleGameWidgets(0);
-	S6Patcher.FPSMode.SetKeyBindings(true);
-	Display.SetFarClipPlaneMinAndMax(0, 0);
-
-	Game.GameTimeSetFactor(S6Patcher.FPSMode.PlayerID, 1);
-	Camera.SwitchCameraBehaviour(0);
+	local FPS = S6Patcher.FPSMode;
+	if not FPS.Enabled and not FPS.CleanupPending then return true; end
+	FPS.Enabled = false;
+	FPS.IsMoving = false;
+	FPS.ForwardHeld = false;
+	FPS.BackwardHeld = false;
+	FPS.LastFrameTime = 0;
+	local Success = true;
+	local Restore = function(_function)
+		local OK, Message = pcall(_function);
+		if not OK then
+			Success = false;
+			Framework.WriteToLog("S6Patcher FPS recovery failed: " .. tostring(Message));
+		end
+	end
+	-- Attempt every recovery step even if one engine API reports an error.
+	Restore(function() Display.SetRenderSky(0); end);
+	Restore(function() Display.SetRenderFogOfWar(1); end);
+	Restore(function() Display.SetRenderBorderPins(1); end);
+	Restore(function() Display.SetUserOptionOcclusionEffect(1); end);
+	Restore(function() Display.UseStandardSettings(); end);
+	Restore(function() Display.SetFarClipPlaneMinAndMax(0, 0); end);
+	Restore(function() GUI.EnableBattleSignals(true); end);
+	Restore(function() GUI.SetFeedbackSoundOutputState(1); end);
+	Restore(function() GUI.PermitContextSensitiveCommandsInSelectionState(); end);
+	Restore(function() GUI.ClearNotes(); end);
+	Restore(function() FPS.ToggleGameWidgets(0); end);
+	if FPS.BindingsChanged then
+		Restore(function() FPS.SetKeyBindings(true); FPS.BindingsChanged = false; end);
+	end
+	-- A cinematic/animated camera now owns the behaviour; do not switch it back to RTS.
+	if g_Throneroom == nil and not CameraAnimation.IsRunning() then
+		Restore(function() Camera.SwitchCameraBehaviour(0); end);
+		if FPS.StrategicPosition then
+			Restore(function() Camera.RTS_SetLookAtPosition(unpack(FPS.StrategicPosition)); end);
+		end
+	end
+	FPS.CleanupPending = not Success;
+	return Success;
 end
 
 S6Patcher.FPSMode.Enable = function()
 	local FPS = S6Patcher.FPSMode;
+	if FPS.Enabled or FPS.CleanupPending then return false; end
+	-- Resolve the spawn and bindings before changing any engine state. No residents are required.
+	local Valid, posX, posY, posZ = pcall(function()
+		FPS.PlayerID = GUI.GetPlayerID();
+		local Market = Logic.GetMarketplace(FPS.PlayerID);
+		assert(type(Market) == "number" and Market ~= 0, "no marketplace available");
+		local X, Y = Logic.GetBuildingApproachPosition(Market);
+		local Z = Display.GetTerrainHeight(X, Y);
+		local Position = {X, Y, Z};
+		for i = 1, 3 do
+			local Value = Position[i];
+			assert(type(Value) == "number" and Value == Value and math.abs(Value) < math.huge, "invalid camera position");
+		end
+		local Seen = {[Keys.Z] = true};
+		for _, Name in pairs(FPS.KeyMapping) do
+			local Key = Keys[Name];
+			assert(Key ~= nil and not Seen[Key], "missing or conflicting camera key: " .. tostring(Name));
+			Seen[Key] = true;
+		end
+		return X, Y, Z;
+	end);
+	if not Valid then
+		Framework.WriteToLog("S6Patcher FPS entry rejected: " .. tostring(posX));
+		return false;
+	end
+	FPS.StrategicPosition = {Camera.RTS_GetLookAtPosition()};
+	FPS.IsMoving = false;
+	FPS.ForwardHeld = false;
+	FPS.BackwardHeld = false;
+	FPS.LastMouseX, FPS.LastMouseY = GUI.GetMousePosition();
+	FPS.CleanupPending = true;
+	local Success, Message = pcall(function()
 
 	Display.SetRenderSky(1);
 	Display.SetUserOptionOcclusionEffect(0);
@@ -968,9 +1054,6 @@ S6Patcher.FPSMode.Enable = function()
 	Display.UseCloseUpSettings();
 
 	Camera.SwitchCameraBehaviour(5);
-
-	local posX, posY = Logic.GetBuildingApproachPosition(Logic.GetMarketplace(FPS.PlayerID));
-	local posZ = Display.GetTerrainHeight(posX, posY);
 
 	FPS.CurrentPosX = posX;
 	FPS.CurrentPosY = posY;
@@ -988,15 +1071,15 @@ S6Patcher.FPSMode.Enable = function()
 	FPS.Yaw = math.pi / 4;
 
 	FPS.ToggleGameWidgets(1);
+	FPS.BindingsChanged = true;
 	FPS.SetKeyBindings(false);
 
+	FPS.Enabled = true;
 	GUI.ClearSelection();
     GUI.ClearNotes();
     GUI.ForbidContextSensitiveCommandsInSelectionState();
     GUI.SetFeedbackSoundOutputState(0);
     GUI.EnableBattleSignals(false);
-
-	Game.GameTimeSetFactor(FPS.PlayerID, 1);
 
 	local Increase = S6Patcher.GetLocalizedText("Increase");
 	local Decrease = S6Patcher.GetLocalizedText("Decrease");
@@ -1009,45 +1092,73 @@ S6Patcher.FPSMode.Enable = function()
 		"{@color:0,255,0,255}- " .. Decrease .. " Draw Distance: " .. FPS.KeyMapping.DecreaseViewDistance .. "{cr}" ..
 		"{@color:0,0,255,255}- " .. Exit .. ": Z{cr}";
 	GUI.AddNote(Text);
+	end);
+	if not Success then
+		Framework.WriteToLog("S6Patcher FPS entry failed: " .. tostring(Message));
+		FPS.Disable();
+		return false;
+	end
+	FPS.CleanupPending = false;
+	return true;
 end
 
 S6Patcher.FPSMode.ToggleGameWidgets = function(_show)
+	local FPS = S6Patcher.FPSMode;
+	if _show == 0 then
+		if FPS.PagePushed then
+			XGUIEng.PopPage();
+			FPS.PagePushed = false;
+		end
+		for Path, Shown in pairs(FPS.WidgetStates or {}) do
+			XGUIEng.ShowWidget(Path, Shown);
+		end
+		FPS.WidgetStates = nil;
+		return;
+	end
+	FPS.WidgetStates = {};
+	local ShowWidget = function(_path, _shown)
+		if FPS.WidgetStates[_path] == nil then
+			FPS.WidgetStates[_path] = XGUIEng.IsWidgetShown(_path);
+		end
+		XGUIEng.ShowWidget(_path, _shown);
+	end
 	local _showInv = (_show == 0 and 1) or 0;
 
-	XGUIEng.ShowWidget("/InGame/ThroneRoom", _show);
-	XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/updater", _show);
+	ShowWidget("/InGame/ThroneRoom", _show);
+	ShowWidget("/InGame/ThroneRoom/Main/updater", _show);
 
-	if _show then
+	if _show == 1 then
 		XGUIEng.PushPage("/InGame/ThroneRoom", false);
-		XGUIEng.ShowWidget("/InGame/Root/Normal/AlignBottomLeft/SubTitles", 0);
+		FPS.PagePushed = true;
+		ShowWidget("/InGame/Root/Normal/AlignBottomLeft/SubTitles", 0);
 	else
 		XGUIEng.PopPage();
 	end
 
-	XGUIEng.ShowAllSubWidgets("/InGame/ThroneRoom/KnightInfo", 0);
-	XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/TitleContainer", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/DialogTopChooseKnight", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/DialogBottomRight3pcs", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/KnightInfoButton", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/Briefing", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/MissionBriefing", 0);
-	XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/Skip", 0);
-    XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/StartButton", 0);
-	XGUIEng.ShowWidget("/InGame/ThroneRoom/Main/BackButton", 0);
+	ShowWidget("/InGame/ThroneRoom/KnightInfo", 0);
+	ShowWidget("/InGame/ThroneRoom/Main/TitleContainer", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/DialogTopChooseKnight", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/DialogBottomRight3pcs", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/KnightInfoButton", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/Briefing", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/MissionBriefing", 0);
+	ShowWidget("/InGame/ThroneRoom/Main/Skip", 0);
+    ShowWidget("/InGame/ThroneRoom/Main/StartButton", 0);
+	ShowWidget("/InGame/ThroneRoom/Main/BackButton", 0);
 
-	XGUIEng.ShowWidget("/InGame/Root/3dOnScreenDisplay", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal", 1);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/TextMessages", 1);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message/MessagePortrait/SpeechStartAgainOrStop", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignBottomRight", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopRight", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopLeft", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopLeft/TopBar", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopLeft/TopBar/UpdateFunction", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message/MessagePortrait/Buttons", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopLeft/QuestLogButton", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignTopLeft/QuestTimers", _showInv);
-    XGUIEng.ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message", _showInv);
+	ShowWidget("/InGame/Root/3dOnScreenDisplay", _showInv);
+    ShowWidget("/InGame/Root/Normal", 1);
+    ShowWidget("/InGame/Root/Normal/TextMessages", 1);
+    ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message/MessagePortrait/SpeechStartAgainOrStop", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignBottomRight", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopRight", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopLeft", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopLeft/TopBar", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopLeft/TopBar/UpdateFunction", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message/MessagePortrait/Buttons", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopLeft/QuestLogButton", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignTopLeft/QuestTimers", _showInv);
+    ShowWidget("/InGame/Root/Normal/AlignBottomLeft/Message", _showInv);
 end
 
 if not S6Patcher.DisableFeatures and g_Throneroom == nil and not Framework.IsNetworkGame() then
