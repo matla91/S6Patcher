@@ -177,6 +177,8 @@ namespace S6Patcher.Source.Views
         {
             try
             {
+                if (PatchSessionRecovery.Recover(Filepath))
+                    Logger.Instance.Log("Recovered interrupted patch session before opening executable.");
                 MainPatcher = new Patcher.Patcher(Filepath);
             }
             catch (Exception ex)
@@ -213,6 +215,7 @@ namespace S6Patcher.Source.Views
 
             string PreviousDocuments = UserScriptHandler.Instance.GlobalDocuments;
             bool Completed = false;
+            PatchSessionRecovery Session = null;
             try
             {
                 DisableUI(false);
@@ -225,8 +228,23 @@ namespace S6Patcher.Source.Views
                 await ViewHelpers.GetPathToOptionsFile();
                 if (MainPatcher.GlobalID != execID.ED && !UserScriptHandler.Instance.DoesUserScriptDirectoryExist())
                     throw new IOException("Game documents folder not found. Select its Options.ini file before patching.");
+                if (MainPatcher.GlobalID == execID.HE_STEAM)
+                {
+                    string executable = txtPath.Text;
+                    var profileDirs = UserScriptHandler.Instance.GetUserScriptDirectories();
+                    string[] scriptNames = ["UserScriptLocal.lua", "UserScriptGlobal.lua", "EMXBinData.s6patcher"];
+                    var files = new List<string> { executable };
+                    foreach (string profile in profileDirs)
+                    {
+                        files.Add(Path.Combine(profile, "Config", "Options.ini"));
+                        foreach (string script in scriptNames) files.Add(Path.Combine(profile, "Script", script));
+                    }
+                    string modDirectory = Path.Combine(IOFileHandler.Instance.GetModLoaderDirectory(MainPatcher.GlobalID, executable), "shr");
+                    Session = PatchSessionRecovery.Begin(executable, files, [modDirectory]);
+                }
                 await PatchByFeatures();
                 MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
+                Session?.Commit();
                 Completed = true;
                 await FinishPatching();
             }
@@ -234,10 +252,25 @@ namespace S6Patcher.Source.Views
             {
                 ErrorTracking.Increment();
                 Logger.Instance.Log(ex.ToString());
+                string recoveryError = "";
+                if (Session != null && !Completed)
+                {
+                    try
+                    {
+                        // On Windows, the opened executable cannot be restored while locked.
+                        ResetPatcher();
+                        Session.Dispose();
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        recoveryError = "\\nAutomatic rollback failed. Do not start the game until the pending recovery journal is inspected. " + rollbackError.GetType().Name;
+                        Logger.Instance.Log("Patch session rollback failed: " + rollbackError);
+                    }
+                }
                 string Result = Completed
                     ? "\nThe executable was committed, but finishing the interface failed. Check S6Patcher.log before retrying."
                     : "\nThe executable was not committed. Auxiliary files may have been updated; see S6Patcher.log.";
-                await ShowMessageBox(Completed ? "Patching completed with an interface error" : "Patching failed", ex.Message + Result);
+                await ShowMessageBox(Completed ? "Patching completed with an interface error" : "Patching failed", ex.Message + Result + recoveryError);
             }
             finally
             {
