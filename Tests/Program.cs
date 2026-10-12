@@ -20,6 +20,7 @@ internal static class Program
         try
         {
             LoggerTests.Run(Test, Root);
+            RecoveryTests();
             ParserTests();
             MappingTests();
             ValidationTests();
@@ -80,6 +81,67 @@ internal static class Program
         { Writer.Write(Encoding.ASCII.GetBytes("EMX")); Writer.Write(Version); Writer.Write((byte)0); Writer.Write(DeclaredSize ?? (uint)Block.Length); Writer.Write(Block.ToArray()); }
         return Stream.ToArray();
     }
+    private static void RecoveryTests()
+    {
+        Test("HE session restores original EXE, scripts, INI and mod", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            string ini = Path.Combine(root, "Options.ini");
+            string script = Path.Combine(root, "UserScriptGlobal.lua");
+            string mod = Path.Combine(root, "shr");
+            File.WriteAllText(exe, "original exe"); File.WriteAllText(ini, "original ini");
+            Directory.CreateDirectory(mod); File.WriteAllText(Path.Combine(mod, "original"), "original mod");
+            var session = PatchSessionRecovery.Begin(exe, [exe, ini, script], [mod]);
+            File.WriteAllText(exe, "changed exe"); File.WriteAllText(ini, "changed ini");
+            File.WriteAllText(script, "new script");
+            Directory.Delete(mod, true); Directory.CreateDirectory(mod);
+            File.WriteAllText(Path.Combine(mod, "new"), "new mod");
+            session.Dispose();
+            Equal("original exe", File.ReadAllText(exe));
+            Equal("original ini", File.ReadAllText(ini));
+            Equal(false, File.Exists(script));
+            Equal("original mod", File.ReadAllText(Path.Combine(mod, "original")));
+            Equal(false, Directory.Exists(PatchSessionRecovery.JournalPath(exe)));
+        });
+        Test("HE session recovers after simulated process interruption", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            File.WriteAllText(exe, "before");
+            _ = PatchSessionRecovery.Begin(exe, [exe], []);
+            File.WriteAllText(exe, "after");
+            Equal(true, PatchSessionRecovery.Recover(exe));
+            Equal("before", File.ReadAllText(exe));
+        });
+        Test("HE committed session preserves modifications", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            File.WriteAllText(exe, "before");
+            using (var session = PatchSessionRecovery.Begin(exe, [exe], []))
+            {
+                File.WriteAllText(exe, "after");
+                session.Commit();
+            }
+            Equal(false, PatchSessionRecovery.Recover(exe));
+            Equal("after", File.ReadAllText(exe));
+        });
+        Test("HE recovery refuses incomplete journal instead of guessing", () =>
+        {
+            string root = Path.Combine(Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string exe = Path.Combine(root, "Settlers6.exe");
+            File.WriteAllText(exe, "original");
+            Directory.CreateDirectory(PatchSessionRecovery.JournalPath(exe));
+            Throws<InvalidDataException>(() => PatchSessionRecovery.Recover(exe));
+            Equal("original", File.ReadAllText(exe));
+        });
+    }
+
     private static void ParserTests()
     {
         Test("parse valid synthetic definition", () => { using BinaryParser P = new(Compressed(Definition())); Bytes([1, 2], P.ParseBinaryWrapper(execID.OV, "TST")[5]); });
