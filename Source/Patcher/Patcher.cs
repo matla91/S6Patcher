@@ -19,6 +19,7 @@ namespace S6Patcher.Source.Patcher
         public readonly Mod GlobalMod;
 
         internal string ExecutablePath => Transaction.TargetPath;
+        internal void SnapshotOriginalExecutable(string destination) => Transaction.CopyOriginalTo(destination);
 
         public readonly execID GlobalID;
         private readonly Lock WriteLock = new();
