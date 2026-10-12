@@ -129,7 +129,8 @@ namespace S6Patcher.Source.Patcher
 
             if (GlobalID == execID.HE_UBISOFT || GlobalID == execID.HE_STEAM)
             {
-                Directory.CreateDirectory(ArchiveFilePath);
+                // The active shr directory is installed only after successful staging.
+                // Creating it here would leave an empty mod after a failed first install.
                 Directory.CreateDirectory(Path.Combine(ArchiveFilePathBase, "shr"));
                 Directory.CreateDirectory(Path.Combine(ArchiveFilePathExtra1, "shr"));
                 Logger.Instance.Log("Directories created.");
