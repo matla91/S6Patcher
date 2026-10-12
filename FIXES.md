@@ -5,6 +5,78 @@ Branche de revue : `fix/reliability-audit-20261011`. Les identifiants de problè
 renvoient à [AUDIT.md](AUDIT.md) ; les résultats et limites de preuve figurent
 dans [TESTING.md](TESTING.md).
 
+## Suite XML/Lua du 12 octobre 2026
+
+Branche : `fix/lua-xml-reliability-20261012`, depuis
+`6feaf7d535bb35a2c8b9850e2ae9d7166237229b` de la branche de référence.
+
+| Commit | Fichiers | Modification et raison |
+| --- | --- | --- |
+| `1fe43889a6d41abf10d39333ba12fb2962174f0a` | `Source/Patcher/GameplayModification.cs`, `Tests/Program.cs` | Refuser les mises à jour XML absentes, ambiguës ou incomplètes avant toute mutation ; 34 régressions dans le banc C# existant |
+| `e2a86de6ab37ac207004439c3ea9f68d47bf185b` | `Resources/Scripts/UserScriptGlobal.lua`, `Tests/hooks_spec.lua`, `.github/workflows/Validate.yml` | Restaurer les hooks temporaires après succès/erreur/imbrication, préserver l'erreur et sa trace ; 34 scénarios Lua 5.1 intégrés à la CI |
+| `c994914b723da9ffeafae0372d7bfedfe3b3ca4b` | `.github/workflows/Validate.yml` | Exposer la ligne de résultats réellement produite par le banc C# dans une étape CI publique ; conserver le code d'échec via pipefail |
+
+### D02 — contrats des modifications XML
+
+Chaque opération est liée à son archive/fichier et l'ensemble doit être
+complet. Un index inconnu, une opération d'un autre fichier, un groupe absent
+ou une configuration dupliquée ne peuvent plus produire un succès partiel.
+Toutes les cibles sont résolues et validées sur le document original avant la
+première affectation. L'erreur identifie le fichier et le contrat insatisfait ;
+une erreur de parsing conserve aussi son exception interne.
+
+| Modification existante | Contrat conservé et désormais vérifié |
+| --- | --- |
+| Couleur joueur | Une collection de `Color` partageant le même parent, au moins deux entrées et un canal direct unique `Red`/`Green`/`Blue` par entrée ; première entrée à zéro, deuxième personnalisée ; suivantes intactes |
+| Habitants | Exactement cinq `SettlerLimit` dans l'ordre existant : 50 sans cathédrale, puis quatre valeurs d'amélioration |
+| Soldats | Un seul `SoldierLimits` à exactement quatre enfants directs `Limit`, dans chacun des cinq fichiers de château existants |
+| Entrepôt | Un seul `OutStockCapacities` à exactement quatre enfants directs `OutStockCapacity` |
+| Dépendance de l'entrepôt | Premier `Worth` présent et scalaire mis à zéro ; les suivants restent inchangés |
+
+Les cibles remplacées doivent être scalaires ; `InnerText` ne peut plus
+supprimer un sous-élément. Pour les couleurs et les limites de soldats/entrepôts,
+les tags homonymes hors des chemins documentés ne sont pas des cibles.
+Le namespace par défaut reste compatible ; les homonymes
+d'un autre namespace sont ignorés. DTD et résolution externe restent interdits.
+Les tableaux de limites exigent les quatre valeurs fournies par l'interface.
+Le contrat des `Color` est étayé par `Features/Modloader.md` et les cardinalités
+des limites par les appels de `GameCustomization`.
+
+La routine retourne un contenu complet uniquement après validation. En erreur,
+les tests vérifient la conservation du tableau source et d'une sentinelle de
+destination : aucun contenu partiel ne peut être remis à l'appelant pour écrire.
+Les écritures/staging existants du ModLoader restent utilisés. La transaction
+globale n'est pas commencée. Faute de corpus légal disponible, l'identité
+sémantique des occurrences ordinales `SettlerLimit`/`Worth` reste à vérifier.
+Ces deux recherches restent globales dans le namespace du document. Plusieurs
+collections `Color` ou des cardinalités de limites inattendues sont refusées
+conservativement, sans prétendre reconnaître ces variantes comme compatibles.
+
+### D03 — durée de vie des hooks Lua
+
+Seuls les remplacements temporaires de `Logic.CreateEntity` des deux callbacks
+de feu de bandits sont modifiés. Chaque invocation capture sa table moteur et
+sa fonction précédente ; les appels imbriqués/récursifs restaurent le hook de
+leur appelant, puis l'appel extérieur restaure la fonction initiale. Installation,
+callback et restauration sont protégés ; les affectations sont vérifiées, y
+compris lorsqu'un setter les ignore sans lever d'erreur.
+
+Lorsque l'installation réussit, le callback est appelé une seule fois avec son
+argument inchangé. Son premier retour
+reste le seul rendu, y compris `nil`/`false`. Après une faute, la restauration
+est tentée avant la journalisation, puis `error(original, 0)` propage le même objet
+ou message avec sa source d'origine. La trace est capturée par `xpcall` quand
+`debug.traceback` est disponible. Capture, journal et conversion des erreurs
+sont protégés : une faute de diagnostic ne transforme pas le gameplay en succès.
+
+Une API refusant la restauration produit un échec explicite après succès du
+callback ; en double faute, l'erreur initiale prime et la faute secondaire est
+journalisée si possible. Aucun mécanisme Lua ne garantit une récupération
+après crash natif ou refus de toute écriture. Les callbacks doivent rester
+synchrones : `xpcall` n'est pas yieldable en Lua 5.1.
+Aucun comportement volontaire des bandits/habitants/chevaliers, aucune caméra,
+aucun mapping binaire et aucune logique ModLoader n'est changé.
+
 ## Commits fonctionnels et validation
 
 | Commit du fork | Objet |
@@ -154,5 +226,6 @@ Release réussie. Voir les preuves et commandes dans [TESTING.md](TESTING.md).
 
 Les fichiers de définitions, le menu binaire, le `mod.bba` embarqué, les offsets,
 le sous-module, les licences et les assets originaux restent inchangés. Les
-points D01–D09 et le mouvement RTS signalé dans l'issue #5 ne sont pas annoncés
-comme corrigés. Aucun fichier propriétaire ou sauvegarde du jeu n'a été ajouté.
+points D01 et D04–D09 ainsi que le mouvement RTS signalé dans l'issue #5 restent
+ouverts. D02/D03 sont traités dans la suite ci-dessus, sans certification en jeu.
+Aucun fichier propriétaire ou sauvegarde du jeu n'a été ajouté.

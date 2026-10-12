@@ -7,6 +7,28 @@ Date de mission : 11 octobre 2026. Fork confirmé par l'API GitHub :
 Travail publié sur `fix/reliability-audit-20261011` ; aucun changement du dépôt
 original, de `master`, de tag ou de release.
 
+## Suite du 12 octobre 2026 — XML et hooks Lua
+
+La branche `fix/lua-xml-reliability-20261012` part exactement du dernier commit
+validé de la première mission, `6feaf7d535bb35a2c8b9850e2ae9d7166237229b`.
+L'état local était propre et les références distantes ont été récupérées avant
+sa création. Les corrections précédentes sont conservées ; ni `master` ni la
+branche de référence ne sont modifiées.
+
+D02 et D03 sont désormais des bugs démontrés sur fixtures, corrigés par deux
+commits séparés : `1fe43889` (XML) et `e2a86de6` (Lua). Le banc XML livré
+provoque 27 échecs sur le code précédent, sans échec des 69 tests C# préexistants.
+Le banc des hooks provoque également 27 échecs avant correction, dont des
+imbrications qui réussissaient mais laissaient le hook actif. Les 103 tests C#,
+34 scénarios de hooks et 22 scénarios caméra passent ensuite sous Linux.
+[FIXES.md](FIXES.md) précise les contrats ; [TESTING.md](TESTING.md) consigne
+les commandes, résultats et limites de la CI.
+
+Ces preuves ne certifient pas les XML commerciaux ni le moteur réel. Les
+conventions ordinales des cinq `SettlerLimit` et du premier `Worth` sont
+conservées, sans inventer d'identifiant de bien ou de nouvelle racine XML.
+Les autres dettes, la transaction globale et la validation en jeu restent ouvertes.
+
 ## Portée et niveau de preuve
 
 L'audit couvre les sources C#, les trois sources Lua, les ressources et les
@@ -109,8 +131,8 @@ Le nom/date des fichiers extraits n'a pas de validation de métadonnées équiva
 | ID | Classe / priorité | Justification | Validation ou intervention |
 | --- | --- | --- | --- |
 | D01 | D / P2 | Menu source et `EMXBinData.s6patcher` sans générateur déterministe dans le dépôt | Documenter puis reproduire compilation/minification du menu |
-| D02 | R / P1 | `GameplayModification.UpdateTags` ignore une occurrence XML absente ; sélection par ordre global des tags | Tests XML de fichiers isolés et erreur explicite sur contrat non satisfait |
-| D03 | R / P1 | Les wrappers feu des bandits changent Logic.CreateEntity puis la restaurent seulement si le callback ne lève pas d'erreur | Test de faute Lua et restauration garantie sans masquer l'erreur |
+| D02 | B / P1, corrigé sur fixtures | Tags absents ignorés, canaux RGB décalés, conteneurs de limites concaténés et cibles structurées détruites | Contrats et totalité des opérations validés avant mutation ; 34 tests XML ; corpus réel à vérifier |
+| D03 | B / P1, corrigé sur doubles | Exception ou sauvegarde globale écrasée par une imbrication laisse Logic.CreateEntity modifiée | Snapshot local par appel, restauration tentée et vérifiée, erreur initiale conservée ; 34 scénarios Lua ; moteur réel non testé |
 | D04 | R / P2 | Table de hash S6Packer utilise Offset=0 comme sentinelle alors qu'une première entrée peut avoir cet offset ; collisions possibles | Fixture de collision et correction locale/évolution du sous-module avec autorisation de son fork |
 | D05 | R / P2 | Logger ouvre le fichier à côté de l'application et ignore l'échec ; journal peut être absent dans un dossier non inscriptible | Destination utilisateur de repli et tests d'E/S |
 | D06 | R / P2 | Lecture des profils par noms anglais/allemand, modification de plusieurs profils ; dispositions non standard non certifiées | Sélection explicite d'un profil, chemins Unicode/UNC/jonctions en environnement Windows |

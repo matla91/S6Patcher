@@ -5,6 +5,15 @@ reposent sur les preuves de [AUDIT.md](AUDIT.md), les corrections de
 [FIXES.md](FIXES.md) et les limites de [TESTING.md](TESTING.md).
 Efforts estimatifs, à ajuster une fois l'environnement de jeu disponible.
 
+## Avancement du 12 octobre 2026
+
+La suite `fix/lua-xml-reliability-20261012`, créée depuis `6feaf7d`, traite D02
+et D03 avec des régressions synthétiques. Les contrats XML sont vérifiés avant
+mutation ; les hooks temporaires sont restaurés et leurs erreurs propagées.
+Il reste à confronter ces deux corrections au corpus légal et au moteur réel.
+Les trois interventions prioritaires ci-dessous, dont la transaction globale,
+ne sont pas commencées par cette suite.
+
 ## Trois prochaines interventions
 
 | Ordre | Intervention | Bénéfice / effort | Dépendance et critère d'acceptation |
@@ -23,8 +32,8 @@ de validation légalement publiables ; les fixtures restent artificielles.
 
 | Priorité / preuve | Travail | Retour attendu / effort | Validation requise |
 | --- | --- | --- | --- |
-| P1 — D02 | Contrat XML explicite : tags/occurrences attendus et gestion des conflits | Élevé / faible à moyen | XML synthétiques complets/incomplets, pas de succès silencieux, mods/campagnes réels isolés |
-| P1 — D03 | Restauration de Logic.CreateEntity même si le callback bandit échoue | Élevé / faible | Test Lua de faute et propagation conservée ; smoke test bandits dans le jeu |
+| P1 — D02, automatique terminé | Confronter les contrats XML au corpus des éditions et mods supportés | Compatibilité / corpus légal requis | 34 régressions synthétiques passent ; vérifier les cinq slots SettlerLimit, le premier Worth et les collections Color sans inventer d'identité sémantique |
+| P1 — D03, automatique terminé | Smoke test des deux callbacks bandits dans le moteur | Compatibilité / accès au jeu requis | 34 scénarios Lua 5.1 passent ; confirmer APIs synchrones, fonctions retrouvées après faute et absence de changement de gameplay |
 | P1 — D08 | Smoke tests jour/nuit, graphismes, chevaliers, campagnes et multijoueur | Élevé / moyen ; donne une couverture réelle des features inchangées | Matrice par édition et options, comparaison au jeu témoin, captures/logs |
 | P2 — D04/M05 | Fixtures de collisions hash et audit ciblé du decoder S6Packer | Moyen à élevé / moyen | Collision incluant Offset=0 ; entrées malformées ; tailles réelles confrontées aux limites ; changement local minimal ou sous-module révisé avec provenance |
 | P2 — D05/D06 | Repli de journal vers un dossier utilisateur et validation des profils Windows | Moyen / faible à moyen | Dossier application non inscriptible ; Unicode/UNC/jonctions ; choix de profil sans modifier d'autres profils |

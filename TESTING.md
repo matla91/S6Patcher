@@ -1,5 +1,97 @@
 # Validation reproductible
 
+## Suite XML/Lua — 12 octobre 2026
+
+Branche : `fix/lua-xml-reliability-20261012`. Départ vérifié après fetch :
+`6feaf7d535bb35a2c8b9850e2ae9d7166237229b` de
+`fix/reliability-audit-20261011`. Le dépôt local était propre. Les résultats
+historiques de la première mission restent enregistrés plus bas.
+
+| Exécution locale Linux | Résultat exact |
+| --- | --- |
+| Baseline, SDK 10.0.100, compilation Debug avec analyseurs et warnings en erreurs | 0 avertissement, 0 erreur ; exit 0 |
+| Baseline C# / caméra Lua 5.1 | 69/69 C# et 22/22 caméra ; exits 0 |
+| Banc C# final exécuté sur `GameplayModification.cs` de `6feaf7d` | 103 tests : 76 passed, 27 failed ; exit 1 attendu ; les 69 préexistants passent |
+| Banc C# après D02 et D03 | 103 tests : 103 passed, 0 failed ; exit 0 ; 34 nouveaux cas XML |
+| Nouveau banc hooks sur script global de `6feaf7d` | 34 tests : 7 passed, 27 failed ; exit 1 attendu |
+| Nouveau banc hooks après D03 | 34 tests : 34 passed, 0 failed ; exit 0 |
+| Caméra existante après D03 | 22 tests : 22 passed, 0 failed ; exit 0 ; script local inchangé |
+| Syntaxe Lua 5.1.5 | 3 sources et 2 bancs acceptés par luac5.1 ; exit 0 |
+| Compilation finale .NET 10.0.100 avec analyseurs | 0 avertissement, 0 erreur ; exit 0 |
+
+La CI du commit de code `e2a86de6ab37ac207004439c3ea9f68d47bf185b`,
+[run 38211518236](https://github.com/matla91/S6Patcher/actions/runs/38211518236),
+a réussi sous Ubuntu et Windows : compilation/analyseurs, banc C# ; sous
+Ubuntu syntaxe Lua/caméra/hooks, sous Windows package Release avec trimming.
+Les étapes ignorées sont uniquement celles de l'autre plateforme. Les statuts
+ont été vérifiés avec le SHA complet, les deux jobs et leurs étapes publiques.
+Le commit `c994914` expose ensuite le décompte C# réellement mesuré dans le nom
+d'une étape publique, sans déduire un résultat Windows du résultat Linux.
+
+Les étapes publiques du
+[run 38212080409](https://github.com/matla91/S6Patcher/actions/runs/38212080409),
+commit `c994914b723da9ffeafae0372d7bfedfe3b3ca4b`, donnent les mesures exactes :
+
+| Plateforme CI | Résultat C# réellement exécuté |
+| --- | --- |
+| Ubuntu | 103 tests, 103 passed, 0 failed |
+| Windows | 104 tests, 104 passed, 0 failed |
+
+Le test supplémentaire Windows est l'appel natif imagehlp sur le PE synthétique
+déjà présent avant cette mission. La commande conserve son exit status grâce
+à `set -euo pipefail`. Le nom de l'étape suivante contient uniquement la ligne
+de bilan produite par le runner ; les journaux privés de GitHub ne sont pas
+nécessaires pour vérifier ces décomptes. Aucune release n'est créée par la CI.
+Les deux jobs de ce run sont terminés avec succès, y compris les tests Lua sur
+Ubuntu et le package Windows avec trimming.
+
+Reproduction depuis cette branche, sans jeu installé :
+
+```sh
+git submodule update --init --recursive
+dotnet --version
+dotnet build S6Patcher.csproj -c Debug -warnaserror -p:EnableNETAnalyzers=true
+dotnet run --project Tests/S6Patcher.Tests.csproj -c Debug
+luac5.1 -p Resources/Scripts/UserScriptLocal.lua
+luac5.1 -p Resources/Scripts/UserScriptGlobal.lua
+luac5.1 -p Resources/Scripts/MainMenuUserScript.lua
+luac5.1 -p Tests/camera_spec.lua
+luac5.1 -p Tests/hooks_spec.lua
+lua5.1 Tests/camera_spec.lua
+lua5.1 Tests/hooks_spec.lua
+```
+
+Le banc C# est toujours l'exécutable existant, pas `dotnet test` ; aucun framework
+n'est ajouté. Les cas XML utilisent le vrai `GameplayModification` et le banc
+des hooks charge le script global de production entier avec des API synthétiques.
+La syntaxe de ce dernier reste celle de Lua 5.1.
+
+Pour vérifier les régressions Lua sur la référence sous Bash :
+
+```sh
+git show 6feaf7d535bb35a2c8b9850e2ae9d7166237229b:Resources/Scripts/UserScriptGlobal.lua > /tmp/s6patcher-global-reference.lua
+lua5.1 Tests/hooks_spec.lua /tmp/s6patcher-global-reference.lua
+```
+
+Résultat attendu : 7 réussites, 27 échecs, exit 1. La comparaison XML a utilisé
+le même banc final avec uniquement le fichier C# de la référence remplacé
+temporairement, sauvegarde et restauration du candidat dans `finally`. Ne pas
+faire cette substitution dans un checkout contenant du travail utilisateur :
+utiliser une copie de test séparée pour reproduire l'expérience.
+
+Les scénarios couvrent les tags absents/surnuméraires/structurés, conteneurs
+ambigus, canaux RGB décalés, namespaces, DTD, mappings incomplets ou d'un autre
+fichier ; les hooks couvrent succès, erreur, imbrication, récursion bornée,
+appels successifs, rechargement, changement de table, installation/restauration
+défaillante ou ignorée, objets d'erreur et diagnostics défaillants.
+
+Limites : aucun XML/archive/exécutable commercial utilisé, aucun test dans le
+moteur réel. `SettlerLimit` et le premier `Worth` restent des contrats ordinaux
+hérités. Un moteur qui refuse toute restauration ou plante n'est pas récupérable
+par ce helper ; la faute n'est jamais présentée comme un succès. Les callbacks
+doivent rester synchrones sous Lua 5.1. Caméra, ModLoader, patches binaires,
+menu précompilé et transaction globale restent hors de cette correction.
+
 ## Référence et résultats enregistrés
 
 Référence auditée : `fd44b9d367a0a43180465151aa8cd21a621d47aa`,
@@ -91,6 +183,8 @@ les versions du moteur ont exactement ce contrat.
 | Mod et BBA | Opérations synthétiques, source absente conservant ancien mod, round-trip, corruption/traversal, fermeture des streams | Archives commerciales, collisions hash, transaction d'extraction complète |
 | Scripts réseau | Refus de lot différent et repli embarqué | Serveur lent, coupures à tous les instants, chaînes proxy |
 | Caméra | 22 transitions/erreurs/contrôles avec mocks | Pile réelle des pages, rendu, touche maintenue, sauvegardes et cinématiques natives |
+| XML, suite du 12 octobre | 34 cas : cibles complètes, absentes, multiples, structurées, namespaces et mappings invalides ; conservation en erreur | Corpus réel des éditions/mods ; identité sémantique des occurrences ordinales |
+| Hooks, suite du 12 octobre | 34 scénarios : nettoyage, imbrication/récursion, erreurs originales et diagnostics protégés | API moteur réelle, callbacks synchrones et crash/refus de restauration natifs |
 | Autres features | Compilation et syntaxe Lua | Graphismes, jour/nuit, campagnes, chevaliers, multijoueur et menus |
 
 ## Préparer un test Windows isolé
@@ -163,7 +257,7 @@ Comparer systématiquement au jeu témoin dans le même environnement.
 | Documents personnalisé initialisé, puis dossier vide | Scripts/INI et DCP ciblent la même racine validée ; dossier vide refusé avant installation ; aucun profil personnel touché |
 | INI avec commentaires, doublons de fragments de clé et réglages existants | Autres sections/commentaires intacts ; réglages présents conservés ; valeurs absentes initialisées |
 | CRC source incorrect, BBA corrompu ou définition avec chemin dangereux | Échec clair ; ancien Bugfix Mod intact ; aucun fichier hors racine ; base/extra1 utilisateur conservés |
-| Mod XML réel et plusieurs mods utilisateur | Fichiers cibles et effets attendus identiques ; consigner tags absents/conflits, encore ouverts |
+| Mod XML réel et plusieurs mods utilisateur | Vérifier les contrats D02 sur corpus légal : effets attendus identiques, tags absents/conflits refusés explicitement avant installation |
 | Archive synthétique puis archive autorisée, extraction deux fois et pack | Contenu/CRC exacts, pas d'ancienne fin ; stream fermé. Vérifier les différences de dates ; extraction complète pas atomique |
 | Download sans réseau ou lot original différent | Repli complet sur ressources embarquées, diagnostic exploitable ; correctif caméra toujours installé |
 | Jour/nuit, ombres/réflexions, zoom, textures, menu/résolution/couleurs | Comparaison visuelle et stabilité au jeu témoin, une option à la fois puis combinaisons ; aucun succès enregistré à ce stade |

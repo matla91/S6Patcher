@@ -3,7 +3,9 @@
 Référence auditée : `matla91/S6Patcher`, branche `master`, commit
 `fd44b9d367a0a43180465151aa8cd21a621d47aa` (« Prepare v9.0 »).
 Les mécanismes ci-dessous décrivent aussi les protections ajoutées sur
-`fix/reliability-audit-20261011`. Voir [FIXES.md](FIXES.md) pour les différences.
+`fix/reliability-audit-20261011` et sa suite `fix/lua-xml-reliability-20261012`,
+partant du commit validé `6feaf7d535bb35a2c8b9850e2ae9d7166237229b`.
+Voir [FIXES.md](FIXES.md) pour les différences.
 
 ## Compilation et dépendances
 
@@ -174,9 +176,17 @@ dans un dossier temporaire, puis installé seulement si tout réussit ; les
 répertoires `base` et `extra1` de l'utilisateur ne sont pas vidés.
 
 Les options de gameplay existantes construisent des modifications XML distinctes.
-La lecture interdit les DTD et les résolveurs XML externes. La sélection actuelle
-par occurrences de tags et le silence en cas de tags manquants sont des limites
-encore ouvertes. Les conflits de définitions visant le même fichier sont refusés.
+La lecture interdit les DTD et les résolveurs XML externes. Chaque opération
+est liée à son archive/fichier ; la totalité du mapping, les cardinalités,
+les conteneurs et les cibles scalaires sont validés avant toute mutation.
+Les couleurs sont sélectionnées par enfants directs de `Color` d'une même
+collection, les soldats/entrepôts par leur conteneur unique. Le namespace par
+défaut est conservé ; les homonymes de namespace étranger ne sont pas ciblés.
+Les cinq `SettlerLimit` et le premier `Worth` gardent leur ordre historique,
+sans supposer d'IDs/racines non documentés. Une erreur produit une exception
+avec contexte fichier et aucun contenu partiellement mis à jour. Les contrats
+et limites de compatibilité sont dans [FIXES.md](FIXES.md). Les conflits de
+définitions visant le même fichier restent refusés.
 
 Le remplacement du dossier de mod utilise deux renommages avec retour arrière
 sur erreur. Il ne fournit pas encore de journal de récupération après une panne
@@ -198,6 +208,15 @@ enchaîne des callbacks du jeu et, pour certains changements de simulation,
 construit des commandes transmises par `GUI.SendScriptCommand`. Le cycle jour/nuit
 joue une séquence d'environnement en fin de mois ; aucun nouvel effet graphique
 ni changement de gameplay n'a été ajouté dans cette mission.
+
+Les deux callbacks de feu de bandits utilisent un hook de `Logic.CreateEntity`
+limité à la durée de l'appel. Chaque invocation possède son snapshot de table
+et fonction ; `xpcall` permet de tenter la restauration après une faute, avant
+de propager l'erreur initiale. Les diagnostics sont protégés et l'état restauré
+est vérifié. Les imbrications sont indépendantes ; les hooks permanents des
+autres features ne sont pas transformés. Les callbacks doivent rester synchrones en
+Lua 5.1 ; les erreurs natives fatales et refus d'écriture du moteur sont des
+limites explicites, pas des succès de récupération.
 
 La première personne utilise le comportement caméra 5 et le widget ThroneRoom
 pour l'actualisation, puis retourne au comportement stratégique 0. Son origine
