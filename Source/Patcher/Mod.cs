@@ -37,6 +37,9 @@ namespace S6Patcher.Source.Patcher
 
         public async Task Create(bool InstallMod, bool DownloadDefinition, bool UseGameplayModification)
         {
+            // Restore the previous mod if the process died after moving it aside.
+            // If both directories exist, stop rather than silently delete evidence.
+            RecoverInterruptedInstall(ArchiveFilePath);
             try
             {
                 await WriteModLoaderFiles();
@@ -101,25 +104,49 @@ namespace S6Patcher.Source.Patcher
                 if (ErrorTracking.Count != PreviousErrors)
                     throw new IOException("Mod generation failed. Previous bugfix files were retained; see S6Patcher.log.");
 
-                string PreviousDirectory = AtomicFile.TemporaryPath(ArchiveFilePath) + ".previous";
-                bool HadPrevious = Directory.Exists(ArchiveFilePath);
-                if (HadPrevious) Directory.Move(ArchiveFilePath, PreviousDirectory);
-                try { Directory.Move(WorkingBugfixDirectory, ArchiveFilePath); }
-                catch
-                {
-                    if (HadPrevious) Directory.Move(PreviousDirectory, ArchiveFilePath);
-                    throw;
-                }
-                if (HadPrevious)
-                {
-                    try { Directory.Delete(PreviousDirectory, true); }
-                    catch (Exception ex) { Logger.Instance.Log("Old mod folder retained at " + PreviousDirectory + ": " + ex.Message); }
-                }
+                InstallStagedDirectory(WorkingBugfixDirectory, ArchiveFilePath);
+
             }
             finally
             {
                 if (Directory.Exists(WorkingBugfixDirectory)) Directory.Delete(WorkingBugfixDirectory, true);
                 WorkingBugfixDirectory = null;
+            }
+        }
+
+        // A deterministic recovery name survives a crash between the two directory renames.
+        // Refuse ambiguous state rather than overwrite a previous installation.
+        internal static void RecoverInterruptedInstall(string active)
+        {
+            string previous = active + ".s6patcher-recovery";
+            if (!Directory.Exists(previous)) return;
+            if (Directory.Exists(active))
+                throw new IOException("A previous mod installation recovery directory remains. Back it up and inspect it before patching again.");
+            Directory.Move(previous, active);
+        }
+
+        internal static void InstallStagedDirectory(string staged, string active, Action afterBackup = null)
+        {
+            string previous = active + ".s6patcher-recovery";
+            if (Directory.Exists(previous))
+                throw new IOException("A pending mod recovery directory exists. Refusing to overwrite it.");
+            bool hadPrevious = Directory.Exists(active);
+            if (hadPrevious) Directory.Move(active, previous);
+            try
+            {
+                afterBackup?.Invoke(); // fault-injection seam, never used in production
+                Directory.Move(staged, active);
+            }
+            catch
+            {
+                if (hadPrevious && !Directory.Exists(active))
+                    Directory.Move(previous, active);
+                throw;
+            }
+            if (hadPrevious)
+            {
+                try { Directory.Delete(previous, true); }
+                catch (Exception ex) { Logger.Instance.Log("Old mod directory retained for inspection: " + ex.GetType().Name); }
             }
         }
 
