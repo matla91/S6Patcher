@@ -19,3 +19,9 @@ The synthetic C# tests cover restoration of executable, INI, existing mod and a 
 - **Validation level:** synthetic fault/restart simulation and CI are not evidence that abrupt process termination, power loss or game loading are safe. Verify using an isolated copy of the legally owned game.
 
 Keep the feature in draft until an isolated Windows process-kill/relaunch matrix and actual History Edition Steam integration checks are completed.
+
+## Follow-up safeguards
+
+Before restoring any target, recovery now validates every named snapshot and rejects missing, duplicated or malformed entries without changing the installation. For Steam HE, the EXE snapshot is taken through the already-open transaction stream, because Windows refuses to reopen the exclusively locked executable. The GUI takes the canonical executable path from the transaction, not the mutable path textbox. A separate test exercises the exclusive-lock snapshot, and another verifies that a missing earlier backup causes no partial rollback.
+
+These protections are not proof of durability under arbitrary power loss, concurrent Steam writes or directory symlink manipulation. A forced process-termination matrix on a disposable Windows game copy remains necessary before claiming P10 fully validated.
