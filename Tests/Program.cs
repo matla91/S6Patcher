@@ -35,6 +35,11 @@ internal static class Program
             await Task.Delay(Timeout.InfiniteTimeSpan);
             return 0;
         }
+        if (args.Length == 1 && args[0] == "--benchmark")
+        {
+            PerformanceBenchmarks.Run();
+            return 0;
+        }
         Directory.CreateDirectory(Root);
         try
         {
