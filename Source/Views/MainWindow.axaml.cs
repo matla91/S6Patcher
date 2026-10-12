@@ -240,7 +240,7 @@ namespace S6Patcher.Source.Views
                         foreach (string script in scriptNames) files.Add(Path.Combine(profile, "Script", script));
                     }
                     string modDirectory = Path.Combine(IOFileHandler.Instance.GetModLoaderDirectory(MainPatcher.GlobalID, executable), "shr");
-                    Session = PatchSessionRecovery.Begin(executable, files, [modDirectory]);
+                    Session = PatchSessionRecovery.Begin(executable, files, [modDirectory], MainPatcher.SnapshotOriginalExecutable);
                 }
                 await PatchByFeatures();
                 MainPatcher.Complete(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && UseCheckSumCalculation);
