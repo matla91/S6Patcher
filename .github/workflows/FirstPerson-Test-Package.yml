@@ -1,0 +1,32 @@
+name: First-person Windows test package
+
+on:
+  push:
+    branches: ['fix/first-person-camera-engine-20261013']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.100
+      - name: Build and verify the untrimmed test delivery
+        shell: pwsh
+        run: ./Tools/Build-FirstPersonTest.ps1
+      - name: Upload the Windows test package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: S6Patcher-first-person-windows-${{ github.sha }}
+          path: artifacts/first-person-test/${{ github.sha }}/package/
+          if-no-files-found: error
+          retention-days: 90

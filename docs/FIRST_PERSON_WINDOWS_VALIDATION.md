@@ -1,5 +1,11 @@
 # Validation First-Person sur Windows — History Edition Steam
 
+Pour une reprise sur un autre PC avec un autre compte Codex, commencer par
+[FIRST_PERSON_REMOTE_START.md](FIRST_PERSON_REMOTE_START.md). Le workflow
+`First-person Windows test package` fournit sur GitHub un package autonome
+sans trimming, ses trois ressources exactes et le manifeste de commit/hashes.
+La construction locale ci-dessous reste disponible pour reproduire le build.
+
 Protocole préparé le 13 octobre 2026 pour le PC fixe Windows équipé d'une RTX
 3060 12 Go. **Aucun résultat en jeu n'est enregistré dans ce document.** Les
 tests Lua simulent les API du moteur ; la compilation et REA/Ghidra ne prouvent
