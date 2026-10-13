@@ -16,7 +16,9 @@ local function setup(language, market)
     state = {language = language or "en", market = market == nil and 42 or market,
         animation = false, network = false, camera = 0, pages = 0, switches = 0,
         mouseX = 900, mouseY = 450, time = 1000, selected = 0, original = {}, widgets = {},
-        down = {}, up = {}, logs = {}, notes = {}, option = 1}
+        down = {}, up = {}, logs = {}, notes = {}, option = 1,
+        sky = 0, fog = 1, borderPins = 1, occlusion = 1, closeUp = false,
+        clipMin = 0, clipMax = 0, forbidden = false, feedback = 1, signals = true}
     S6Patcher = {DisableFeatures = false}
     g_Throneroom = nil
     Options = {GetIntValue = function(_, _, default) return state.option or default end}
@@ -40,20 +42,28 @@ local function setup(language, market)
         GetBuildingApproachPosition = function(id) assert(id ~= 0, "market missing"); return 1200, 2300 end,
         GetPlayerSectorAtPosition = function() return 1 end}
     local function noop() end
-    Display = {GetTerrainHeight = function() return 25 end, SetRenderSky = noop, SetRenderFogOfWar = noop,
-        SetRenderBorderPins = noop, SetUserOptionOcclusionEffect = noop, UseStandardSettings = noop,
-        UseCloseUpSettings = noop, SetFarClipPlaneMinAndMax = noop}
+    Display = {GetTerrainHeight = function() return 25 end,
+        SetRenderSky = function(v) state.sky = v end, SetRenderFogOfWar = function(v) state.fog = v end,
+        SetRenderBorderPins = function(v) state.borderPins = v end,
+        SetUserOptionOcclusionEffect = function(v) state.occlusion = v end,
+        UseStandardSettings = function() state.closeUp = false end,
+        UseCloseUpSettings = function() state.closeUp = true end,
+        SetFarClipPlaneMinAndMax = function(a, b) state.clipMin = a; state.clipMax = b end}
     Camera = {SwitchCameraBehaviour = function(id) state.camera = id; state.switches = state.switches + 1 end,
-        ThroneRoom_SetPosition = noop, ThroneRoom_SetLookAt = noop, ThroneRoom_SetFOV = noop,
-        RTS_GetLookAtPosition = function() return 3000, 4000 end, RTS_SetLookAtPosition = noop}
+        ThroneRoom_SetPosition = function(x, y, z) state.position = {x, y, z} end,
+        ThroneRoom_SetLookAt = function(x, y, z) state.look = {x, y, z} end, ThroneRoom_SetFOV = noop,
+        RTS_GetLookAtPosition = function() return 3000, 4000 end,
+        RTS_SetLookAtPosition = function(x, y) state.strategicPosition = {x, y} end}
     GUI = {GetPlayerID = function() return 1 end, GetMousePosition = function() return state.mouseX, state.mouseY end,
         GetSelectedEntity = function() return state.selected end, ClearSelection = function()
             local hadSelection = state.selected ~= 0
             state.selected = 0
             if hadSelection then GameCallback_GUI_SelectionChanged(1) end
         end, ClearNotes = noop, AddNote = function(text) assert(type(text) == "string"); table.insert(state.notes, text) end,
-        ForbidContextSensitiveCommandsInSelectionState = noop, PermitContextSensitiveCommandsInSelectionState = noop,
-        SetFeedbackSoundOutputState = noop, EnableBattleSignals = noop}
+        ForbidContextSensitiveCommandsInSelectionState = function() state.forbidden = true end,
+        PermitContextSensitiveCommandsInSelectionState = function() state.forbidden = false end,
+        SetFeedbackSoundOutputState = function(v) state.feedback = v end,
+        EnableBattleSignals = function(v) state.signals = v end}
     Game = {GameTimeSetFactor = function() state.speedChanges = (state.speedChanges or 0) + 1 end}
     for _, name in ipairs({"ThroneRoomCameraControl", "GameCallback_GUI_SelectionChanged", "KeyBindings_SaveGame",
         "GameCallback_Escape", "OnBackButtonPressed", "OnSkipButtonPressed", "ThroneRoomLeftClick",
@@ -177,6 +187,89 @@ test("releasing one movement key preserves the other held key", function()
     FPS.ToggleMovement(false, FPS.Directions.Backward)
     eq(FPS.IsMoving, true); eq(FPS.CurrentDirection, FPS.Directions.Forward)
     FPS.ToggleMovement(false, FPS.Directions.Forward); eq(FPS.IsMoving, false)
+end)
+test("successful exit restores strategic controls and render defaults", function()
+    setup(); S6Patcher.FPSMode.Enable()
+    eq(state.forbidden, true); eq(state.feedback, 0); eq(state.signals, false); eq(state.closeUp, true)
+    S6Patcher.FPSMode.Disable()
+    eq(state.forbidden, false); eq(state.feedback, 1); eq(state.signals, true); eq(state.closeUp, false)
+    eq(state.sky, 0); eq(state.fog, 1); eq(state.borderPins, 1); eq(state.occlusion, 1)
+    eq(state.clipMin, 0); eq(state.clipMax, 0)
+    eq(state.strategicPosition[1], 3000); eq(state.strategicPosition[2], 4000)
+    eq(state.up[Keys.W], ""); eq(state.up[Keys.S], "")
+end)
+test("entry error recovers even when diagnostic output fails", function()
+    setup(); Camera.ThroneRoom_SetFOV = function() error("FOV fault") end
+    Framework.WriteToLog = function() error("logger fault") end
+    eq(S6Patcher.FPSMode.Enable(), false)
+    eq(state.camera, 0); eq(state.pages, 0); eq(S6Patcher.FPSMode.CleanupPending, false)
+end)
+test("frame error recovers even when diagnostic output fails", function()
+    setup(); S6Patcher.FPSMode.Enable()
+    Camera.ThroneRoom_SetLookAt = function() error("frame fault") end
+    Framework.WriteToLog = function() error("logger fault") end
+    ThroneRoomCameraControl()
+    eq(S6Patcher.FPSMode.Enabled, false); eq(state.camera, 0); eq(state.pages, 0)
+    eq(state.forbidden, false); eq(state.feedback, 1); eq(state.signals, true)
+end)
+test("recovery survives diagnostic failure and remains available for retry", function()
+    setup(); S6Patcher.FPSMode.Enable(); local original = Display.UseStandardSettings
+    Display.UseStandardSettings = function() error("restore fault") end
+    Framework.WriteToLog = function() error("logger fault") end
+    GameCallback_Escape()
+    eq(S6Patcher.FPSMode.CleanupPending, true); eq(state.camera, 0); eq(state.pages, 0)
+    eq(state.forbidden, false); eq(state.feedback, 1); eq(state.signals, true)
+    Display.UseStandardSettings = original; GameCallback_Escape()
+    eq(S6Patcher.FPSMode.CleanupPending, false); eq(state.closeUp, false)
+    eq(S6Patcher.FPSMode.Enable(), true)
+end)
+test("unprintable engine errors cannot abort recovery", function()
+    setup(); S6Patcher.FPSMode.Enable()
+    local fault = setmetatable({}, {__tostring = function() error("formatting fault") end})
+    Display.UseStandardSettings = function() error(fault) end
+    GameCallback_Escape()
+    eq(S6Patcher.FPSMode.CleanupPending, true); eq(state.camera, 0); eq(state.pages, 0)
+    eq(state.forbidden, false)
+    assert(state.logs[#state.logs]:find("<unprintable error>", 1, true))
+end)
+test("selection callback can cancel entry without leaving altered controls", function()
+    setup(); state.selected = 9
+    S6Patcher.GameCallback_GUI_SelectionChanged_FPSMode = function() GameCallback_Escape() end
+    eq(S6Patcher.FPSMode.Enable(), false)
+    eq(S6Patcher.FPSMode.Enabled, false); eq(S6Patcher.FPSMode.CleanupPending, false)
+    eq(state.camera, 0); eq(state.pages, 0)
+    eq(state.forbidden, false); eq(state.feedback, 1); eq(state.signals, true)
+end)
+test("reentrant escape during cleanup does not delegate or repeat restoration", function()
+    setup(); S6Patcher.FPSMode.Enable(); local original = Display.UseStandardSettings
+    local calls = 0
+    Display.UseStandardSettings = function()
+        calls = calls + 1; GameCallback_Escape(); original()
+    end
+    GameCallback_Escape()
+    eq(calls, 1); eq(state.original.GameCallback_Escape, nil)
+    eq(state.pages, 0); eq(state.camera, 0); eq(S6Patcher.FPSMode.CleanupPending, false)
+end)
+test("moving camera keeps initial eye height and aims from its final position", function()
+    setup(); S6Patcher.FPSMode.Enable(); local FPS = S6Patcher.FPSMode
+    local initialZ = state.position[3]
+    FPS.ToggleMovement(true, FPS.Directions.Forward); state.time = state.time + 100
+    ThroneRoomCameraControl()
+    eq(state.position[3], initialZ); eq(state.look[3], state.position[3])
+    assert(math.abs(state.look[1] - state.position[1] - math.cos(FPS.Yaw) * 1000) < 0.000001)
+    assert(math.abs(state.look[2] - state.position[2] - math.sin(FPS.Yaw) * 1000) < 0.000001)
+    Display.GetTerrainHeight = function() return 125 end; state.time = state.time + 100
+    ThroneRoomCameraControl(); eq(state.look[3], state.position[3])
+    local previousX = state.position[1]
+    Logic.GetPlayerSectorAtPosition = function() return 0 end
+    state.mouseX = state.mouseX + 20; state.time = state.time + 100
+    ThroneRoomCameraControl(); eq(state.position[1], previousX)
+    assert(math.abs(state.look[1] - state.position[1] - math.cos(FPS.Yaw) * 1000) < 0.000001)
+end)
+test("script diagnostic marker is emitted and tolerates a broken logger", function()
+    setup(); eq(state.logs[1], "S6Patcher FPS script loaded: camera-engine-20261013-v1")
+    Framework.WriteToLog = function() error("logger fault") end
+    assert(compile(cameraSource))(); eq(S6Patcher.FPSMode.Enabled, false)
 end)
 print(string.format("Camera: %d tests, %d passed, %d failed", tests, tests - failures, failures))
 os.exit(failures == 0 and 0 or 1)

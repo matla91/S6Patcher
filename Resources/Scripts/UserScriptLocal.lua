@@ -673,6 +673,14 @@ end
 -- ************************************************************************************************************************************************************* --
 -- FPS Mode																																	 					 --
 -- ************************************************************************************************************************************************************* --
+-- A diagnostic failure must never interrupt camera recovery, including error formatting.
+local LogFPS = function(_stage, _message)
+	pcall(function()
+		local Printed, Message = pcall(tostring, _message);
+		Framework.WriteToLog("S6Patcher FPS " .. _stage .. (_message ~= nil and ": " .. (Printed and Message or "<unprintable error>") or ""));
+	end);
+end
+LogFPS("script loaded", "camera-engine-20261013-v1");
 -- A load/restart can execute this script again in the same local Lua state.
 if S6Patcher.FPSMode and (S6Patcher.FPSMode.Enabled or S6Patcher.FPSMode.CleanupPending) then
 	-- Keep the old recovery state and callbacks if an engine step failed; Z/Escape can retry.
@@ -775,7 +783,9 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 	end
 	ThroneRoomCameraControl = function()
 		local FPS = S6Patcher.FPSMode;
+		if FPS.Activating or FPS.Disabling then return; end
 		if FPS.Enabled and (S6Patcher.DisableFeatures or g_Throneroom ~= nil or Framework.IsNetworkGame() or CameraAnimation.IsRunning()) then
+			LogFPS("interrupted");
 			FPS.Disable();
 		end
 
@@ -785,7 +795,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 
 		local Success, Message = pcall(FPS.UpdateCamera);
 		if not Success then
-			Framework.WriteToLog("S6Patcher FPS update failed: " .. tostring(Message));
+			LogFPS("update failed", Message);
 			FPS.Disable();
 		end
 	end
@@ -825,7 +835,10 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		local DirectionY = CosPitch * SinYaw;
 		local DirectionZ = math.sin(Pitch);
 
-		Camera.ThroneRoom_SetLookAt(CamX + DirectionX * 1000, CamY + DirectionY * 1000, CamZ + DirectionZ * 1000);
+		local SetLookAt = function()
+			Camera.ThroneRoom_SetLookAt(FPS.CurrentPosX + DirectionX * 1000,
+				FPS.CurrentPosY + DirectionY * 1000, FPS.CurrentPosZ + DirectionZ * 1000);
+		end
 
 		FPS.LastMouseX = MouseX;
 		FPS.LastMouseY = MouseY;
@@ -838,6 +851,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		FPS.LastFrameTime = Time;
 
 		if not FPS.IsMoving then
+			SetLookAt();
 			return;
 		end
 
@@ -854,6 +868,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 
 		local Sector = Logic.GetPlayerSectorAtPosition(FPS.PlayerID, CamX, CamY);
 		if Sector == 0 then
+			SetLookAt();
 			return;
 		end
 
@@ -873,6 +888,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 		FPS.CurrentPosZ = NewZ
 
 		Camera.ThroneRoom_SetPosition(CamX, CamY, NewZ);
+		SetLookAt();
 		--------------------------------------------------------------------------------------------------------
 	end
 
@@ -972,7 +988,13 @@ end
 
 S6Patcher.FPSMode.Disable = function()
 	local FPS = S6Patcher.FPSMode;
+	-- Engine/selection callbacks may request an exit during synchronous entry.
+	-- Finish the protected entry first, then restore its complete set of mutations.
+	if FPS.Activating then FPS.CancelActivation = true; return false; end
+	if FPS.Disabling then return false; end
 	if not FPS.Enabled and not FPS.CleanupPending then return true; end
+	FPS.Disabling = true;
+	FPS.CleanupPending = true;
 	FPS.Enabled = false;
 	FPS.IsMoving = false;
 	FPS.ForwardHeld = false;
@@ -983,7 +1005,7 @@ S6Patcher.FPSMode.Disable = function()
 		local OK, Message = pcall(_function);
 		if not OK then
 			Success = false;
-			Framework.WriteToLog("S6Patcher FPS recovery failed: " .. tostring(Message));
+			LogFPS("recovery failed", Message);
 		end
 	end
 	-- Attempt every recovery step even if one engine API reports an error.
@@ -1002,19 +1024,23 @@ S6Patcher.FPSMode.Disable = function()
 		Restore(function() FPS.SetKeyBindings(true); FPS.BindingsChanged = false; end);
 	end
 	-- A cinematic/animated camera now owns the behaviour; do not switch it back to RTS.
-	if g_Throneroom == nil and not CameraAnimation.IsRunning() then
+	local OtherCamera = true;
+	Restore(function() OtherCamera = g_Throneroom ~= nil or CameraAnimation.IsRunning(); end);
+	if not OtherCamera then
 		Restore(function() Camera.SwitchCameraBehaviour(0); end);
 		if FPS.StrategicPosition then
 			Restore(function() Camera.RTS_SetLookAtPosition(unpack(FPS.StrategicPosition)); end);
 		end
 	end
 	FPS.CleanupPending = not Success;
+	FPS.Disabling = false;
+	if Success then LogFPS("exit complete"); end
 	return Success;
 end
 
 S6Patcher.FPSMode.Enable = function()
 	local FPS = S6Patcher.FPSMode;
-	if FPS.Enabled or FPS.CleanupPending then return false; end
+	if FPS.Enabled or FPS.CleanupPending or FPS.Activating or FPS.Disabling then return false; end
 	-- Resolve the spawn and bindings before changing any engine state. No residents are required.
 	local Valid, posX, posY, posZ = pcall(function()
 		FPS.PlayerID = GUI.GetPlayerID();
@@ -1036,7 +1062,7 @@ S6Patcher.FPSMode.Enable = function()
 		return X, Y, Z;
 	end);
 	if not Valid then
-		Framework.WriteToLog("S6Patcher FPS entry rejected: " .. tostring(posX));
+		LogFPS("entry rejected", posX);
 		return false;
 	end
 	FPS.StrategicPosition = {Camera.RTS_GetLookAtPosition()};
@@ -1045,6 +1071,8 @@ S6Patcher.FPSMode.Enable = function()
 	FPS.BackwardHeld = false;
 	FPS.LastMouseX, FPS.LastMouseY = GUI.GetMousePosition();
 	FPS.CleanupPending = true;
+	FPS.CancelActivation = false;
+	FPS.Activating = true;
 	local Success, Message = pcall(function()
 
 	Display.SetRenderSky(1);
@@ -1057,7 +1085,7 @@ S6Patcher.FPSMode.Enable = function()
 
 	FPS.CurrentPosX = posX;
 	FPS.CurrentPosY = posY;
-	FPS.CurrentPosZ = posZ + 500;
+	FPS.CurrentPosZ = posZ + 200;
 
 	Camera.ThroneRoom_SetPosition(posX, posY, FPS.CurrentPosZ);
 	Camera.ThroneRoom_SetLookAt(posX + 1000, posY + 1000, FPS.CurrentPosZ);
@@ -1093,12 +1121,15 @@ S6Patcher.FPSMode.Enable = function()
 		"{@color:0,0,255,255}- " .. Exit .. ": Z{cr}";
 	GUI.AddNote(Text);
 	end);
+	FPS.Activating = false;
 	if not Success then
-		Framework.WriteToLog("S6Patcher FPS entry failed: " .. tostring(Message));
+		LogFPS("entry failed", Message);
 		FPS.Disable();
 		return false;
 	end
+	if FPS.CancelActivation then FPS.Disable(); return false; end
 	FPS.CleanupPending = false;
+	LogFPS("entry complete");
 	return true;
 end
 
