@@ -6,10 +6,17 @@ This repository includes an **opt-in synthetic performance harness**. It does no
 
 ```sh
 git submodule update --init --recursive
-dotnet run --project Tests/S6Patcher.Tests.csproj -c Release -- --benchmark
+dotnet run --project Tests/S6Patcher.Tests.csproj -c Release -p:SelfContained=false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:ValidateExecutableReferencesMatchSelfContained=false -- --benchmark
 ```
 
 The normal C# regression suite is unchanged when `--benchmark` is omitted. No performance threshold is part of CI, because shared CI runners vary in storage, CPU load and hardware.
+
+The console harness calls APIs in the application assembly. For this run,
+both builds use framework-dependent settings; the SDK executable-reference
+metadata check is disabled only for this invocation because it otherwise
+reports the application's self-contained Release defaults (`NETSDK1151`).
+The synthetic regression suite and Windows package build retain their own
+checks. These command overrides do not change the published application.
 
 ## Measurements
 
