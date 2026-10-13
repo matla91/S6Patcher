@@ -1,5 +1,20 @@
 # Suite de la fiabilisation
 
+## Caméra — 13 octobre 2026
+
+Diagnostic Lua et import REA/Ghidra réalisés sur HE Steam décompressée,
+correctifs `9c25ef3`/`5e73c71` et 40 scénarios caméra verts. La prochaine
+validation reste [l'essai Windows réel](docs/FIRST_PERSON_WINDOWS_VALIDATION.md)
+sur le PC fixe : marché sans habitants, vingt sorties Z/Échap, RTS/UI,
+cinématiques et rechargements. La propriété des pages superposées et les
+overrides graphiques de runtime restent explicitement non résolus.
+
+Le package pour cet essai est publié sans trimming. Le journal JSON P10 du
+package trimmed échoue lorsque sa réflexion est désactivée (probe des
+méthodes réelles) ; une correction distincte de métadonnées/source generation
+et son test de package seront nécessaires avant de distribuer ce format.
+Ce constat ne déclenche aucune modification de P10 dans la mission caméra.
+
 Aucune nouvelle feature prévue dans cette mission. Les priorités ci-dessous
 reposent sur les preuves de [AUDIT.md](AUDIT.md), les corrections de
 [FIXES.md](FIXES.md) et les limites de [TESTING.md](TESTING.md).

@@ -1,5 +1,23 @@
 # Architecture technique de S6Patcher
 
+Actualisation caméra du 13 octobre 2026 : la branche de travail part de la
+base consolidée `32e5f10`, qui contient déjà les corrections XML/hooks,
+diagnostics et journal HE Steam. Les passages historiques ci-dessous sur
+l'absence de récupération de dossiers doivent être lus avec
+[RECOVERY.md](RECOVERY.md). Le contrat FPS reste le même ; l'activation
+interrompue est annulée après son bloc protégé, le nettoyage se marque
+pending avant ses appels et les diagnostics ne peuvent plus l'interrompre.
+Le marqueur `camera-engine-20261013-v1` permet de vérifier le chargement
+réel du candidat selon [ce protocole](docs/FIRST_PERSON_WINDOWS_VALIDATION.md).
+
+REA/Ghidra a confirmé le manager de modes : slot 5 ThroneRoom, slot 0 RTS,
+un seul contrôleur dispatché. Le retour 0 ne remet pas les états GUI/rendu.
+Les setters de pose ThroneRoom sont silencieux lorsque le contrôleur est
+inactif ; le FOV est un champ du contrôleur copié dans la caméra par position.
+La couche Lua vérifie donc le mode, conserve une reprise externe, applique
+le FOV dans cet ordre et restaure l'occlusion persistée capturée. Les adresses,
+preuves et limites sont dans [FIRST_PERSON_NATIVE.md](docs/FIRST_PERSON_NATIVE.md).
+
 Référence auditée : `matla91/S6Patcher`, branche `master`, commit
 `fd44b9d367a0a43180465151aa8cd21a621d47aa` (« Prepare v9.0 »).
 Les mécanismes ci-dessous décrivent aussi les protections ajoutées sur

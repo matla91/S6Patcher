@@ -1,5 +1,25 @@
 # Audit technique — première étape de fiabilisation
 
+## Actualisation caméra du 13 octobre 2026
+
+La mission reprend la base consolidée `32e5f10`, avec 22 tests caméra, et
+conserve C01–C09. `9c25ef3` traite diagnostics/cleanup réentrants et pose ;
+`5e73c71` traite les contrats natifs de mode, setters silencieux, FOV différé
+et préférence d'occlusion. **40/40 caméra, 34/34 hooks et 121/121 C#** passent
+localement sous Windows. Le banc final produit 17 échecs attendus sur la base,
+sans échec des 22 tests historiques. L'import Ghidra décompressé a abouti ;
+[preuves natives et H1–H9](docs/FIRST_PERSON_NATIVE.md),
+[diagnostic de mission](docs/FIRST_PERSON_CAMERA.md) et
+[protocole réel](docs/FIRST_PERSON_WINDOWS_VALIDATION.md).
+
+C10 (cause certaine du témoignage) et C11 (propriété des pages/cinématiques)
+restent ouverts. Des overrides graphiques effectués seulement à l'exécution
+ne sont pas intégralement capturés. Aucun test du moteur réel n'est effectué.
+Le publish trimmed révèle aussi un défaut P10 hérité de réflexion JSON,
+reproduit sur fixtures ; le package de cet essai est sans trimming. Les
+descriptions d'absence de jeu ci-dessous appartiennent à l'audit historique,
+pas à l'inventaire du portable du 13 octobre.
+
 Date de mission : 11 octobre 2026. Fork confirmé par l'API GitHub :
 [`matla91/S6Patcher`](https://github.com/matla91/S6Patcher), parent
 `Eisenmonoxid/S6Patcher`. Départ : `master` à

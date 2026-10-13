@@ -1,5 +1,58 @@
 # Validation reproductible
 
+## Caméra / moteur — 13 octobre 2026
+
+La mission caméra reprend `32e5f105effcd476c5b9a3bc82f63d944bdb1471` de
+`fix/diagnostics-20261012`, sur `fix/first-person-camera-engine-20261013`.
+Sur Windows, avec le SDK **10.0.100** et Lua **5.1.5**, la référence donne
+22/22 caméra, 34/34 hooks et 121/121 C# ; build Debug avec analyseurs et
+warnings en erreurs : zéro warning/erreur. Le décompte 19 de la mission est
+historique ; la base consolidée contient déjà 22 scénarios caméra.
+
+Le commit `9c25ef3` ajoute neuf scénarios au banc caméra existant. Le même
+banc sur le script de référence donne **23/31 réussites, 8 échecs** (les
+22 tests historiques passent). Après correction : **31/31 caméra**, **34/34
+hooks**, **121/121 C#**, même build et syntaxe des trois scripts et deux bancs
+acceptés. Les doubles vérifient maintenant les commandes contextuelles,
+feedback/alertes, paramètres de rendu par défaut et cible RTS, au lieu de
+réduire tous ces setters à des fonctions vides. Ils ne certifient pas une
+préférence graphique arbitraire ni la pile de pages native.
+
+Le second commit `5e73c71`, guidé par
+[REA/Ghidra](docs/FIRST_PERSON_NATIVE.md), porte la suite à **40/40 caméra**,
+avec **34/34 hooks**, **121/121 C#**, syntaxe des cinq fichiers acceptée et
+build Debug toujours sans warning/erreur. Le banc final donne **31/40** sur
+`9c25ef3` (9 échecs attendus) et **23/40** sur `32e5f10` (17 échecs attendus,
+les 22 historiques passent). Il vérifie setters silencieux hors contrôleur,
+reprise native de mode/cible, FOV appliqué à l'arrêt et occlusion 0/2/reprise.
+
+Le publish Release standard avec trimming réussit mais produit IL2026 sur
+le journal JSON HE Steam ; son runtime désactive la réflexion JSON. Un probe
+des méthodes **réelles** `PatchSessionRecovery.Begin/Recover` sur fixtures
+reproduit `InvalidOperationException` avec ce switch, puis réussit avec
+réflexion activée. Ce défaut préexistant ne touche pas au correctif Lua ;
+le package de développement pour l'essai est construit avec
+`-p:PublishTrimmed=false`. Aucune correction générale P10 n'est introduite.
+Les preuves sont dans `../analysis/first-person-20261013/json-trimming-probe/`.
+Le protocole Windows utilise explicitement ce package sans trimming.
+
+Un probe séparé du **Release réel** compare les trois ressources via leur
+API et streams embarqués, puis les déploie avec le vrai
+`UserScriptHandler.CreateUserScriptFiles(false)` dans un profil temporaire
+initialisé : **9 comparaisons SHA-256, 0 échec**. Sources, bytes embarqués et
+fichiers écrits correspondent. Preuve dans
+`../analysis/first-person-20261013/deployment-resource-probe/` ; cela atteste
+la provenance du package, pas le chargement par le moteur.
+
+Les sorties détaillées sont conservées hors Git dans
+`../analysis/first-person-20261013/`. La procédure actuelle de déploiement,
+preuve de chargement et restauration intégrale est
+[FIRST_PERSON_WINDOWS_VALIDATION.md](docs/FIRST_PERSON_WINDOWS_VALIDATION.md).
+Les sections datées ci-dessous sont des résultats historiques : les
+limitations de récupération HE et de logger décrites avant les changements
+consolidés doivent être lues avec [RECOVERY.md](RECOVERY.md) et
+[DIAGNOSTICS.md](DIAGNOSTICS.md). Aucune validation en jeu n'est annoncée.
+
 ## Suite XML/Lua — 12 octobre 2026
 
 Branche : `fix/lua-xml-reliability-20261012`. Départ vérifié après fetch :
@@ -271,8 +324,9 @@ options de nettoyage de mod proposées, pas le profil Documents entier.
 
 Recueillir le commit, les commandes/outputs, le hash du patcher et de l'EXE,
 l'édition/distribution/langue, les options sélectionnées, les hashes avant/après
-et `S6Patcher.log` situé à côté du patcher. Le journal peut manquer si ce dossier
-est non inscriptible : défaut encore ouvert, à noter dans le résultat.
+et `S6Patcher.log` situé à côté du patcher, ou son repli
+`%LOCALAPPDATA%/S6Patcher/S6Patcher.log` si le premier dossier est non
+inscriptible. Collecter stderr si les deux destinations échouent.
 
 Le script écrit via `Framework.WriteToLog` les marqueurs `S6Patcher FPS entry
 rejected`, `entry failed`, `update failed`, `recovery failed`. Recueillir le log

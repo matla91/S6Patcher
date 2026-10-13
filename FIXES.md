@@ -1,5 +1,31 @@
 # Corrections livrées
 
+## Caméra — 13 octobre 2026
+
+Depuis la base consolidée `32e5f10`, `9c25ef3` conserve `FPSMode` et les
+protections précédentes. Le nettoyage marque `CleanupPending` avant ses
+appels et protège ses diagnostics, même si le logger ou `tostring` échoue.
+Une activation interrompue par un callback termine son bloc protégé puis
+restaure toutes ses mutations ; une restauration réentrante est ignorée.
+La hauteur d'entrée est alignée sur les 200 unités du déplacement existant,
+et le look-at utilise la position finale de la frame. Le marqueur de
+chargement `camera-engine-20261013-v1` et les transitions sont journalisés
+sans dépendre du succès du diagnostic.
+
+Neuf scénarios ciblés étendent le banc existant : 31/31 après correction,
+23/31 sur la référence (les 22 anciens passent). Marché, options, autres
+hooks, archives, offsets et sous-module sont conservés. Le protocole réel
+est [ici](docs/FIRST_PERSON_WINDOWS_VALIDATION.md) ; ces tests ne déclarent
+pas la caméra validée dans le moteur.
+
+Le second commit `5e73c71` ajoute les corrections étayées par
+[l'analyse native](docs/FIRST_PERSON_NATIVE.md) : vérifier les modes natifs à
+l'entrée/sortie, libérer FPS lors d'une reprise de contrôleur en conservant
+mode/cible externes, appliquer FOV avant position et lors d'un réglage sans
+déplacement, restaurer la préférence d'occlusion capturée (0/1/2), protéger
+les lectures de snapshots avant mutation. Le banc final passe **40/40**,
+contre 31/40 sur `9c25ef3` et 23/40 sur `32e5f10`. Aucun patch binaire.
+
 Référence : `fd44b9d367a0a43180465151aa8cd21a621d47aa` de `matla91/S6Patcher/master`.
 Branche de revue : `fix/reliability-audit-20261011`. Les identifiants de problèmes
 renvoient à [AUDIT.md](AUDIT.md) ; les résultats et limites de preuve figurent
