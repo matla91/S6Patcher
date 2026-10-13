@@ -18,10 +18,15 @@ local function setup(language, market)
         mouseX = 900, mouseY = 450, time = 1000, selected = 0, original = {}, widgets = {},
         down = {}, up = {}, logs = {}, notes = {}, option = 1,
         sky = 0, fog = 1, borderPins = 1, occlusion = 1, closeUp = false,
-        clipMin = 0, clipMax = 0, forbidden = false, feedback = 1, signals = true}
+        clipMin = 0, clipMax = 0, forbidden = false, feedback = 1, signals = true,
+        occlusionOption = 1, nativeActive = false, rtsX = 3000, rtsY = 4000, rtsSetCalls = 0}
     S6Patcher = {DisableFeatures = false}
     g_Throneroom = nil
-    Options = {GetIntValue = function(_, _, default) return state.option or default end}
+    Options = {GetIntValue = function(section, key, default)
+        if section == "S6Patcher" and key == "FirstPersonCamera" then return state.option end
+        if section == "Display" and key == "Occlusion" then return state.occlusionOption end
+        return default
+    end}
     Keys = {Z = 90, W = 87, S = 83, U = 85, T = 84, R = 82, P = 80}
     local keyNames = {KeyMenuWeather = "W", KeyBuildingStartStop = "S", KeyBuildingUpgrade = "U",
         KeyBuildTrail = "T", KeyBuildStreet = "R", KeyMenuProduction = "P"}
@@ -49,11 +54,28 @@ local function setup(language, market)
         UseStandardSettings = function() state.closeUp = false end,
         UseCloseUpSettings = function() state.closeUp = true end,
         SetFarClipPlaneMinAndMax = function(a, b) state.clipMin = a; state.clipMax = b end}
-    Camera = {SwitchCameraBehaviour = function(id) state.camera = id; state.switches = state.switches + 1 end,
-        ThroneRoom_SetPosition = function(x, y, z) state.position = {x, y, z} end,
-        ThroneRoom_SetLookAt = function(x, y, z) state.look = {x, y, z} end, ThroneRoom_SetFOV = noop,
-        RTS_GetLookAtPosition = function() return 3000, 4000 end,
-        RTS_SetLookAtPosition = function(x, y) state.strategicPosition = {x, y} end}
+    Camera = {SwitchCameraBehaviour = function(id)
+            state.switches = state.switches + 1
+            if state.ignoreSwitch then return end
+            state.camera = id; state.nativeActive = id == 5
+        end,
+        GetCameraBehaviour = function() return state.camera end,
+        -- Native setters silently ignore pose writes while the controller is inactive.
+        -- SetPosition also copies the controller FOV into the live camera.
+        ThroneRoom_SetPosition = function(x, y, z)
+            if not state.nativeActive or state.camera ~= 5 then return end
+            state.position = {x, y, z}; state.appliedFOV = state.controllerFOV
+        end,
+        ThroneRoom_SetLookAt = function(x, y, z)
+            if not state.nativeActive or state.camera ~= 5 then return end
+            state.look = {x, y, z}
+        end,
+        ThroneRoom_SetFOV = function(v) state.controllerFOV = v end,
+        RTS_GetLookAtPosition = function() return state.rtsX, state.rtsY end,
+        RTS_SetLookAtPosition = function(x, y)
+            state.strategicPosition = {x, y}; state.rtsX = x; state.rtsY = y
+            state.rtsSetCalls = state.rtsSetCalls + 1
+        end}
     GUI = {GetPlayerID = function() return 1 end, GetMousePosition = function() return state.mouseX, state.mouseY end,
         GetSelectedEntity = function() return state.selected end, ClearSelection = function()
             local hadSelection = state.selected ~= 0
@@ -270,6 +292,75 @@ test("script diagnostic marker is emitted and tolerates a broken logger", functi
     setup(); eq(state.logs[1], "S6Patcher FPS script loaded: camera-engine-20261013-v1")
     Framework.WriteToLog = function() error("logger fault") end
     assert(compile(cameraSource))(); eq(S6Patcher.FPSMode.Enabled, false)
+end)
+test("ignored native camera switch rejects entry and restores controls", function()
+    setup(); state.ignoreSwitch = true
+    eq(S6Patcher.FPSMode.Enable(), false)
+    eq(S6Patcher.FPSMode.Enabled, false); eq(S6Patcher.FPSMode.CleanupPending, false)
+    eq(state.camera, 0); eq(state.pages, 0); eq(state.position, nil); eq(state.look, nil)
+    eq(state.forbidden, false); eq(state.closeUp, false); eq(state.rtsSetCalls, 0)
+end)
+test("ignored exit switch leaves recovery pending and can be retried", function()
+    setup(); S6Patcher.FPSMode.Enable(); state.ignoreSwitch = true
+    GameCallback_Escape()
+    eq(state.camera, 5); eq(S6Patcher.FPSMode.Enabled, false); eq(S6Patcher.FPSMode.CleanupPending, true)
+    eq(state.pages, 0); eq(state.forbidden, false); eq(state.feedback, 1); eq(state.signals, true)
+    state.ignoreSwitch = false; GameCallback_Escape()
+    eq(state.camera, 0); eq(S6Patcher.FPSMode.CleanupPending, false); eq(state.pages, 0)
+    eq(S6Patcher.FPSMode.Enable(), true)
+end)
+test("external native camera takeover preserves its mode and strategic target", function()
+    for _, mode in ipairs({0, 1}) do
+        setup(); S6Patcher.FPSMode.Enable()
+        state.camera = mode; state.nativeActive = false; state.rtsX = 7000; state.rtsY = 8000
+        ThroneRoomCameraControl()
+        eq(S6Patcher.FPSMode.Enabled, false); eq(state.camera, mode); eq(state.pages, 0)
+        eq(state.rtsX, 7000); eq(state.rtsY, 8000); eq(state.rtsSetCalls, 0)
+        eq(state.original.ThroneRoomCameraControl, 1); eq(state.forbidden, false)
+    end
+end)
+test("escape preserves an external camera selected before the next frame", function()
+    setup(); S6Patcher.FPSMode.Enable(); state.camera = 1; state.nativeActive = false
+    state.rtsX = 7000; state.rtsY = 8000; GameCallback_Escape()
+    eq(state.camera, 1); eq(state.rtsX, 7000); eq(state.rtsY, 8000); eq(state.rtsSetCalls, 0)
+    eq(state.pages, 0); eq(S6Patcher.FPSMode.CleanupPending, false)
+end)
+test("entry from a nonstrategic native camera is rejected before mutations", function()
+    setup(); state.camera = 1
+    eq(S6Patcher.FPSMode.Enable(), false)
+    eq(state.switches, 0); eq(state.pages, 0); eq(state.closeUp, false); eq(state.camera, 1)
+    eq(state.forbidden, false); eq(S6Patcher.FPSMode.CleanupPending, false)
+end)
+test("FOV reaches the live camera on entry and while stationary", function()
+    setup(); S6Patcher.FPSMode.Enable(); eq(state.appliedFOV, 75)
+    local x, y, z = state.position[1], state.position[2], state.position[3]
+    S6Patcher.FPSMode.ModifyFieldOfView(false)
+    eq(S6Patcher.FPSMode.IsMoving, false); eq(state.controllerFOV, 80); eq(state.appliedFOV, 80)
+    eq(state.position[1], x); eq(state.position[2], y); eq(state.position[3], z)
+end)
+test("occlusion levels zero and two are restored without boolean conversion", function()
+    for _, level in ipairs({0, 2}) do
+        setup(); state.occlusionOption = level; state.occlusion = level
+        S6Patcher.FPSMode.Enable(); eq(state.occlusion, 0)
+        S6Patcher.FPSMode.Disable(); eq(state.occlusion, level)
+    end
+end)
+test("occlusion retry retains the pre-entry level when options change", function()
+    setup(); state.occlusionOption = 2; state.occlusion = 2; S6Patcher.FPSMode.Enable()
+    local original = Display.SetUserOptionOcclusionEffect
+    Display.SetUserOptionOcclusionEffect = function(v)
+        if v == 2 then error("occlusion restore fault") end
+        original(v)
+    end
+    GameCallback_Escape(); eq(S6Patcher.FPSMode.CleanupPending, true); eq(state.occlusion, 0)
+    state.occlusionOption = 1; Display.SetUserOptionOcclusionEffect = original
+    GameCallback_Escape(); eq(S6Patcher.FPSMode.CleanupPending, false); eq(state.occlusion, 2)
+end)
+test("strategic or mouse snapshot errors reject entry before mutations", function()
+    setup(); Camera.RTS_GetLookAtPosition = function() error("RTS snapshot fault") end
+    eq(S6Patcher.FPSMode.Enable(), false); eq(state.switches, 0); eq(state.closeUp, false)
+    setup(); GUI.GetMousePosition = function() error("mouse snapshot fault") end
+    eq(S6Patcher.FPSMode.Enable(), false); eq(state.switches, 0); eq(state.closeUp, false)
 end)
 print(string.format("Camera: %d tests, %d passed, %d failed", tests, tests - failures, failures))
 os.exit(failures == 0 and 0 or 1)

@@ -784,7 +784,8 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 	ThroneRoomCameraControl = function()
 		local FPS = S6Patcher.FPSMode;
 		if FPS.Activating or FPS.Disabling then return; end
-		if FPS.Enabled and (S6Patcher.DisableFeatures or g_Throneroom ~= nil or Framework.IsNetworkGame() or CameraAnimation.IsRunning()) then
+		if FPS.Enabled and (S6Patcher.DisableFeatures or g_Throneroom ~= nil or Framework.IsNetworkGame()
+			or CameraAnimation.IsRunning() or Camera.GetCameraBehaviour() ~= 5) then
 			LogFPS("interrupted");
 			FPS.Disable();
 		end
@@ -807,7 +808,7 @@ S6Patcher.FPSMode.OverrideGameFuncs = function()
 
 		local Time = Framework.GetTimeMs();
 		local MouseX, MouseY = GUI.GetMousePosition();
-		local CamX, CamY, CamZ = FPS.CurrentPosX, FPS.CurrentPosY, FPS.CurrentPosZ; -- Camera.ThroneRoom_GetPosition();
+		local CamX, CamY = FPS.CurrentPosX, FPS.CurrentPosY;
 
 		--------------------------------------------------------------------------------------------------------
 		local DeltaX = MouseX - FPS.LastMouseX;
@@ -968,6 +969,9 @@ S6Patcher.FPSMode.ModifyFieldOfView = function(_decrease)
 
 	S6Patcher.FPSMode.StateModifiers.FOV = Value;
 	Camera.ThroneRoom_SetFOV(S6Patcher.FPSMode.StateModifiers.FOV);
+	-- The controller copies its FOV into the live camera when position is applied.
+	Camera.ThroneRoom_SetPosition(S6Patcher.FPSMode.CurrentPosX,
+		S6Patcher.FPSMode.CurrentPosY, S6Patcher.FPSMode.CurrentPosZ);
 end
 
 S6Patcher.FPSMode.ModifyViewDistance = function(_decrease)
@@ -1012,7 +1016,7 @@ S6Patcher.FPSMode.Disable = function()
 	Restore(function() Display.SetRenderSky(0); end);
 	Restore(function() Display.SetRenderFogOfWar(1); end);
 	Restore(function() Display.SetRenderBorderPins(1); end);
-	Restore(function() Display.SetUserOptionOcclusionEffect(1); end);
+	Restore(function() Display.SetUserOptionOcclusionEffect(FPS.SavedOcclusion or 1); end);
 	Restore(function() Display.UseStandardSettings(); end);
 	Restore(function() Display.SetFarClipPlaneMinAndMax(0, 0); end);
 	Restore(function() GUI.EnableBattleSignals(true); end);
@@ -1023,11 +1027,15 @@ S6Patcher.FPSMode.Disable = function()
 	if FPS.BindingsChanged then
 		Restore(function() FPS.SetKeyBindings(true); FPS.BindingsChanged = false; end);
 	end
-	-- A cinematic/animated camera now owns the behaviour; do not switch it back to RTS.
+	-- Preserve a camera selected by another controller, including a new RTS target.
 	local OtherCamera = true;
-	Restore(function() OtherCamera = g_Throneroom ~= nil or CameraAnimation.IsRunning(); end);
+	Restore(function() OtherCamera = g_Throneroom ~= nil or CameraAnimation.IsRunning()
+		or Camera.GetCameraBehaviour() ~= 5; end);
 	if not OtherCamera then
-		Restore(function() Camera.SwitchCameraBehaviour(0); end);
+		Restore(function()
+			Camera.SwitchCameraBehaviour(0);
+			assert(Camera.GetCameraBehaviour() == 0, "strategic camera switch was ignored");
+		end);
 		if FPS.StrategicPosition then
 			Restore(function() Camera.RTS_SetLookAtPosition(unpack(FPS.StrategicPosition)); end);
 		end
@@ -1042,7 +1050,8 @@ S6Patcher.FPSMode.Enable = function()
 	local FPS = S6Patcher.FPSMode;
 	if FPS.Enabled or FPS.CleanupPending or FPS.Activating or FPS.Disabling then return false; end
 	-- Resolve the spawn and bindings before changing any engine state. No residents are required.
-	local Valid, posX, posY, posZ = pcall(function()
+	local Valid, posX, posY, posZ, StrategicPosition, MouseX, MouseY, Occlusion = pcall(function()
+		assert(Camera.GetCameraBehaviour() == 0, "strategic camera is not active");
 		FPS.PlayerID = GUI.GetPlayerID();
 		local Market = Logic.GetMarketplace(FPS.PlayerID);
 		assert(type(Market) == "number" and Market ~= 0, "no marketplace available");
@@ -1059,17 +1068,21 @@ S6Patcher.FPSMode.Enable = function()
 			assert(Key ~= nil and not Seen[Key], "missing or conflicting camera key: " .. tostring(Name));
 			Seen[Key] = true;
 		end
-		return X, Y, Z;
+		local StrategicPosition = {Camera.RTS_GetLookAtPosition()};
+		local MouseX, MouseY = GUI.GetMousePosition();
+		local Occlusion = Options.GetIntValue("Display", "Occlusion", 1);
+		return X, Y, Z, StrategicPosition, MouseX, MouseY, Occlusion;
 	end);
 	if not Valid then
 		LogFPS("entry rejected", posX);
 		return false;
 	end
-	FPS.StrategicPosition = {Camera.RTS_GetLookAtPosition()};
+	FPS.StrategicPosition = StrategicPosition;
+	FPS.SavedOcclusion = Occlusion;
 	FPS.IsMoving = false;
 	FPS.ForwardHeld = false;
 	FPS.BackwardHeld = false;
-	FPS.LastMouseX, FPS.LastMouseY = GUI.GetMousePosition();
+	FPS.LastMouseX, FPS.LastMouseY = MouseX, MouseY;
 	FPS.CleanupPending = true;
 	FPS.CancelActivation = false;
 	FPS.Activating = true;
@@ -1082,14 +1095,15 @@ S6Patcher.FPSMode.Enable = function()
 	Display.UseCloseUpSettings();
 
 	Camera.SwitchCameraBehaviour(5);
+	assert(Camera.GetCameraBehaviour() == 5, "first-person camera switch was ignored");
 
 	FPS.CurrentPosX = posX;
 	FPS.CurrentPosY = posY;
 	FPS.CurrentPosZ = posZ + 200;
 
+	Camera.ThroneRoom_SetFOV(FPS.StateModifiers.FOV);
 	Camera.ThroneRoom_SetPosition(posX, posY, FPS.CurrentPosZ);
 	Camera.ThroneRoom_SetLookAt(posX + 1000, posY + 1000, FPS.CurrentPosZ);
-	Camera.ThroneRoom_SetFOV(FPS.StateModifiers.FOV);
 
 	Display.SetFarClipPlaneMinAndMax(FPS.StateModifiers.ViewDistance, FPS.StateModifiers.ViewDistance);
 
